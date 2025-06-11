@@ -449,7 +449,7 @@ class MP_Stripe_Price_Updater {
                     $('#save_rule_button').removeClass('mpsp-processing').text('Save Price Update Rule');
                     
                     if (response.success) {
-                        alert('Rule saved successfully! Price updates will be processed hourly via cron job.');
+                        alert('Rule saved successfully! Price updates will be processed every 5 minutes via cron job.');
                         location.reload();
                     } else {
                         alert('Error saving rule: ' + response.data);
