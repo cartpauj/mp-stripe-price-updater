@@ -1363,6 +1363,17 @@ class MP_Stripe_Price_Updater {
             $item_id = $stripe_sub['items']['data'][0]['id'];
             $current_price = $stripe_sub['items']['data'][0]['price'];
             
+            // Check currency compatibility before proceeding
+            $stripe_currency = strtoupper($stripe_sub['currency'] ?? '');
+            $memberpress_currency = strtoupper($options->currency_code ?? '');
+            
+            if (!empty($stripe_currency) && !empty($memberpress_currency) && $stripe_currency !== $memberpress_currency) {
+                return array(
+                    'success' => false, 
+                    'message' => "Currency mismatch: Stripe subscription uses {$stripe_currency} but MemberPress is configured for {$memberpress_currency}. Cannot update subscription with different currency."
+                );
+            }
+            
             // Get or create Stripe price using MemberPress gateway method
             try {
                 // Get the product associated with this subscription

@@ -329,6 +329,7 @@ Based on developer feedback, the following critical improvements were implemente
 - **Zero Decimal Currency Handling**: Implements `MeprStripeGateway::is_zero_decimal_currency()` for proper Stripe API amount formatting
 - **Currency-Aware Stripe Integration**: Automatically handles zero decimal currencies (JPY, KRW, etc.) vs regular currencies (USD, EUR, etc.)
 - **Consistent Price Display**: All user-facing price displays respect MemberPress currency formatting preferences
+- **Currency Mismatch Detection**: Early validation prevents Stripe API errors when subscription currency differs from MemberPress configuration
 
 ### Stripe Integration Optimization
 - **Plan/Price Reuse**: Integrated `MeprStripeGateway::get_stripe_plan_id()` to reuse existing Stripe price/plan IDs instead of creating duplicates
@@ -381,3 +382,24 @@ Based on developer feedback, the following critical improvements were implemente
 - **Performance Optimization**: More efficient processing through native MemberPress methods and reduced API calls
 
 These enhancements transform the plugin from a functional proof-of-concept into a production-ready, enterprise-grade solution that seamlessly integrates with MemberPress architecture while providing superior performance, reliability, and user experience for customers operating membership sites globally.
+
+## Post-Release Currency Validation Enhancement
+
+During QA/development testing, a currency mismatch error was identified and resolved with an additional enhancement:
+
+### Currency Compatibility Validation
+- **Early Detection**: Validates currency compatibility before attempting Stripe API calls
+- **Prevents API Errors**: Eliminates "The price specified supports currencies of `usd` which doesn't include the expected currency of `dkk`" errors
+- **Clear Error Messages**: Provides descriptive feedback about currency mismatches (e.g., "Currency mismatch: Stripe subscription uses DKK but MemberPress is configured for USD")
+- **API Efficiency**: Saves unnecessary Stripe API calls by detecting issues early
+- **Improved Logging**: Currency mismatch errors are properly categorized in job reports and logs
+- **Configuration Guidance**: Helps administrators identify and resolve currency configuration issues
+
+### Technical Implementation
+- **Location**: Added to `update_stripe_subscription()` method after retrieving Stripe subscription data
+- **Validation Logic**: Compares `$stripe_sub['currency']` with `$options->currency_code` from MemberPress configuration
+- **Case Normalization**: Uses `strtoupper()` for reliable currency code comparison
+- **Early Exit Strategy**: Returns descriptive error before attempting price creation or subscription updates
+- **Integration**: Works seamlessly with existing error handling and reporting systems
+
+This enhancement addresses scenarios where existing Stripe subscriptions may have different currencies than the current MemberPress configuration, providing better error handling and preventing failed API requests that would otherwise result in cryptic Stripe error messages.
