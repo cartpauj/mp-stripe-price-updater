@@ -1349,33 +1349,15 @@ class MP_Stripe_Price_Updater {
                 return array('success' => false, 'message' => 'Gateway not found');
             }
             
+            // The MemberPress gateway will handle API key selection automatically
             $gateway_config = $gateways[$rule['gateway_id']];
             
-            // Validate API keys structure exists
-            if (empty($gateway_config['api_keys']) || 
-                !isset($gateway_config['api_keys']['test']) || 
-                !isset($gateway_config['api_keys']['live'])) {
-                return array('success' => false, 'message' => 'Gateway API keys structure is invalid');
-            }
-            
-            // Determine which API key to use based on gateway configuration
-            // Check for global testing constant first (matches MemberPress logic)
+            // Determine API mode for logging purposes
             $use_test = false;
             if (defined('MEMBERPRESS_STRIPE_TESTING') && MEMBERPRESS_STRIPE_TESTING) {
                 $use_test = true;
             } else {
-                // Check gateway-specific test mode settings
                 $use_test = !empty($gateway_config['test_mode']) || !empty($gateway_config['sandbox']);
-            }
-            
-            // Select appropriate API key
-            $api_key = $use_test ? 
-                ($gateway_config['api_keys']['test']['secret'] ?? '') : 
-                ($gateway_config['api_keys']['live']['secret'] ?? '');
-            
-            if (empty($api_key)) {
-                $mode_str = $use_test ? 'test' : 'live';
-                return array('success' => false, 'message' => "Stripe API key not configured for {$mode_str} mode. Please check your MemberPress Stripe gateway settings.");
             }
             
             $stripe_sub_id = $subscription->subscr_id;
@@ -1384,8 +1366,12 @@ class MP_Stripe_Price_Updater {
                 return array('success' => false, 'message' => 'Invalid Stripe subscription ID');
             }
             
-            // Get current subscription from Stripe
-            $stripe_sub = $this->stripe_api_request('GET', "subscriptions/{$stripe_sub_id}", null, $api_key);
+            // Create MemberPress gateway instance for this specific gateway ID
+            $gateway = new MeprStripeGateway();
+            $gateway->set_id($rule['gateway_id']);
+            
+            // Get current subscription from Stripe using MemberPress gateway method
+            $stripe_sub = $gateway->send_stripe_request("subscriptions/{$stripe_sub_id}", array(), 'get');
             
             if (!$stripe_sub || !empty($stripe_sub['error'])) {
                 return array('success' => false, 'message' => 'Failed to retrieve Stripe subscription: ' . ($stripe_sub['error']['message'] ?? 'Unknown error'));
@@ -1400,10 +1386,6 @@ class MP_Stripe_Price_Updater {
             
             // Get or create Stripe price using MemberPress gateway method
             try {
-                // Create a gateway instance for this specific gateway ID
-                $gateway = new MeprStripeGateway();
-                $gateway->set_id($rule['gateway_id']);
-                
                 // Get the product associated with this subscription
                 $product = new MeprProduct($subscription->product_id);
                 
@@ -1433,7 +1415,7 @@ class MP_Stripe_Price_Updater {
                 'expand' => array('latest_invoice') // Include latest invoice in response for verification
             );
             
-            $updated_sub = $this->stripe_api_request('POST', "subscriptions/{$stripe_sub_id}", $update_data, $api_key);
+            $updated_sub = $gateway->send_stripe_request("subscriptions/{$stripe_sub_id}", $update_data, 'post');
             
             if (!$updated_sub || !empty($updated_sub['error'])) {
                 return array('success' => false, 'message' => 'Failed to update subscription: ' . ($updated_sub['error']['message'] ?? 'Unknown error'));
@@ -1483,90 +1465,6 @@ class MP_Stripe_Price_Updater {
         }
     }
     
-    private function stripe_api_request($method, $endpoint, $data = null, $api_key = null) {
-        try {
-            $url = 'https://api.stripe.com/v1/' . $endpoint;
-            
-            $args = array(
-                'timeout' => 30,
-                'headers' => array(
-                    'Authorization' => 'Bearer ' . $api_key,
-                    'Content-Type' => 'application/x-www-form-urlencoded',
-                ),
-                'sslverify' => true,
-                'user-agent' => 'MemberPress-Stripe-Price-Updater/2.0.0'
-            );
-            
-            if ($method === 'POST' && $data) {
-                $args['body'] = $this->build_stripe_data($data);
-                $args['method'] = 'POST';
-            } else {
-                $args['method'] = 'GET';
-            }
-            
-            $response = wp_remote_request($url, $args);
-            
-            if (is_wp_error($response)) {
-                return array('error' => array('message' => 'Request failed: ' . $response->get_error_message()));
-            }
-            
-            $http_code = wp_remote_retrieve_response_code($response);
-            $body = wp_remote_retrieve_body($response);
-            
-            if (empty($body)) {
-                return array('error' => array('message' => 'Empty response from Stripe API'));
-            }
-            
-            $decoded = json_decode($body, true);
-            
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                return array('error' => array('message' => 'Invalid JSON response from Stripe API: ' . json_last_error_msg()));
-            }
-            
-            if ($http_code >= 400) {
-                $error_message = 'HTTP error ' . $http_code;
-                if (isset($decoded['error']['message'])) {
-                    $error_message = $decoded['error']['message'];
-                } elseif (isset($decoded['error']['type'])) {
-                    $error_message = $decoded['error']['type'] . ': ' . ($decoded['error']['code'] ?? 'Unknown error');
-                }
-                return array('error' => array('message' => $error_message));
-            }
-            
-            return $decoded;
-        } catch (Exception $e) {
-            return array('error' => array('message' => 'API request exception: ' . $e->getMessage()));
-        }
-    }
-    
-    private function build_stripe_data($data, $prefix = '') {
-        try {
-            $result = array();
-            
-            if (!is_array($data)) {
-                return '';
-            }
-            
-            foreach ($data as $key => $value) {
-                $full_key = $prefix ? $prefix . '[' . $key . ']' : $key;
-                
-                if (is_array($value)) {
-                    $sub_data = $this->build_stripe_data($value, $full_key);
-                    if (!empty($sub_data)) {
-                        parse_str($sub_data, $sub_array);
-                        $result = array_merge($result, $sub_array);
-                    }
-                } else {
-                    $result[$full_key] = $value;
-                }
-            }
-            
-            return http_build_query($result);
-        } catch (Exception $e) {
-            error_log('Stripe data building error: ' . $e->getMessage());
-            return '';
-        }
-    }
     
     private function log_price_update($subscription_id, $old_price, $new_price, $status, $message = '') {
         $log = get_option('mpsp_price_update_log', array());
