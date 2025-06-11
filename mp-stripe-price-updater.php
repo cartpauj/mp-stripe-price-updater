@@ -188,16 +188,16 @@ class MP_Stripe_Price_Updater {
                                 
                                 <div id="price_range_fields" style="margin-top: 15px;">
                                     <label>
-                                        Min Price: $<input type="number" step="0.01" name="mpsp_min_price" min="0" style="width: 100px;" />
+                                        Min Price: <?php echo esc_html(MeprOptions::fetch()->currency_symbol); ?><input type="number" step="0.01" name="mpsp_min_price" min="0" style="width: 100px;" />
                                     </label>
                                     <label style="margin-left: 20px;">
-                                        Max Price: $<input type="number" step="0.01" name="mpsp_max_price" min="0" style="width: 100px;" />
+                                        Max Price: <?php echo esc_html(MeprOptions::fetch()->currency_symbol); ?><input type="number" step="0.01" name="mpsp_max_price" min="0" style="width: 100px;" />
                                     </label>
                                 </div>
                                 
                                 <div id="specific_price_field" style="display:none; margin-top: 15px;">
                                     <label>
-                                        Specific Price: $<input type="number" step="0.01" name="mpsp_specific_price" min="0" style="width: 100px;" />
+                                        Specific Price: <?php echo esc_html(MeprOptions::fetch()->currency_symbol); ?><input type="number" step="0.01" name="mpsp_specific_price" min="0" style="width: 100px;" />
                                     </label>
                                 </div>
                                 <p class="description">Filter subscriptions by their current price.</p>
@@ -229,7 +229,7 @@ class MP_Stripe_Price_Updater {
                             </th>
                             <td>
                                 <label>
-                                    New Price: $<input type="number" step="0.01" name="mpsp_new_price" id="mpsp_new_price" min="0" required style="width: 100px;" />
+                                    New Price: <?php echo esc_html(MeprOptions::fetch()->currency_symbol); ?><input type="number" step="0.01" name="mpsp_new_price" id="mpsp_new_price" min="0" required style="width: 100px;" />
                                 </label>
                                 <p class="description">The new price to set for matching subscriptions.</p>
                             </td>
@@ -673,7 +673,7 @@ class MP_Stripe_Price_Updater {
             $html .= '<tr>';
             $html .= '<td>' . esc_html($user->display_name) . '</td>';
             $html .= '<td>' . esc_html($user->user_email) . '</td>';
-            $html .= '<td>$' . esc_html(number_format($sub->price, 2)) . '</td>';
+            $html .= '<td>' . esc_html(MeprAppHelper::format_currency($sub->price)) . '</td>';
             $html .= '<td>' . esc_html($sub->period . ' ' . $sub->period_type) . '</td>';
             $html .= '<td>' . esc_html($sub->subscr_id) . '</td>';
             $html .= '<td>' . esc_html(ucfirst($sub->status)) . '</td>';
@@ -681,7 +681,7 @@ class MP_Stripe_Price_Updater {
         }
         
         $html .= '</tbody></table>';
-        $html .= '<p><strong>New price will be: $' . esc_html(number_format($form_data['new_price'], 2)) . '</strong></p>';
+        $html .= '<p><strong>New price will be: ' . esc_html(MeprAppHelper::format_currency($form_data['new_price'])) . '</strong></p>';
         
         wp_send_json_success($html);
     }
@@ -1398,9 +1398,13 @@ class MP_Stripe_Price_Updater {
             $item_id = $stripe_sub['items']['data'][0]['id'];
             $current_price = $stripe_sub['items']['data'][0]['price'];
             
-            // Create new price object in Stripe
+            // Create new price object in Stripe using MemberPress currency formatting
+            $stripe_amount = MeprStripeGateway::is_zero_decimal_currency() ? 
+                intval($rule['new_price']) : 
+                intval($rule['new_price'] * 100);
+            
             $price_data = array(
-                'unit_amount' => intval($rule['new_price'] * 100), // Convert to cents
+                'unit_amount' => $stripe_amount,
                 'currency' => strtolower($current_price['currency']),
                 'recurring' => array(
                     'interval' => $current_price['recurring']['interval'],
@@ -1617,10 +1621,10 @@ class MP_Stripe_Price_Updater {
                     <td>
                         <?php
                         if ($rule['price_filter_type'] === 'specific') {
-                            echo '$' . esc_html(number_format($rule['specific_price'], 2));
+                            echo esc_html(MeprAppHelper::format_currency($rule['specific_price']));
                         } else {
-                            $min = !empty($rule['min_price']) ? '$' . number_format($rule['min_price'], 2) : 'Any';
-                            $max = !empty($rule['max_price']) ? '$' . number_format($rule['max_price'], 2) : 'Any';
+                            $min = !empty($rule['min_price']) ? MeprAppHelper::format_currency($rule['min_price']) : 'Any';
+                            $max = !empty($rule['max_price']) ? MeprAppHelper::format_currency($rule['max_price']) : 'Any';
                             echo esc_html($min . ' - ' . $max);
                         }
                         ?>
@@ -1632,7 +1636,7 @@ class MP_Stripe_Price_Updater {
                         echo esc_html($period . ' ' . $interval);
                         ?>
                     </td>
-                    <td>$<?php echo esc_html(number_format($rule['new_price'], 2)); ?></td>
+                    <td><?php echo esc_html(MeprAppHelper::format_currency($rule['new_price'])); ?></td>
                     <td><?php echo esc_html(date('Y-m-d', strtotime($rule['created_at']))); ?></td>
                     <td><?php echo $rule['last_processed'] ? esc_html(date('Y-m-d H:i', strtotime($rule['last_processed']))) : 'Never'; ?></td>
                     <td><?php echo intval($rule['processed_count'] ?? 0); ?></td>
@@ -1681,8 +1685,8 @@ class MP_Stripe_Price_Updater {
                 <tr>
                     <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($entry['updated_at']))); ?></td>
                     <td><?php echo esc_html($entry['subscription_id']); ?></td>
-                    <td>$<?php echo esc_html(number_format($entry['old_price'], 2)); ?></td>
-                    <td>$<?php echo esc_html(number_format($entry['new_price'], 2)); ?></td>
+                    <td><?php echo esc_html(MeprAppHelper::format_currency($entry['old_price'])); ?></td>
+                    <td><?php echo esc_html(MeprAppHelper::format_currency($entry['new_price'])); ?></td>
                     <td>
                         <span style="color: <?php echo $entry['status'] === 'success' ? 'green' : 'red'; ?>;">
                             <?php echo esc_html(ucfirst($entry['status'])); ?>
