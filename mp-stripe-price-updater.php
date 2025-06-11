@@ -998,6 +998,15 @@ class MP_Stripe_Price_Updater {
     }
     
     private function start_background_job($rule, $rule_index) {
+        // Get matching subscriptions to determine if there's work to do
+        $matching_subscriptions = $this->get_matching_subscriptions($rule);
+        $total_subscriptions = count($matching_subscriptions);
+        
+        // If no subscriptions match, don't start a job or send notifications
+        if ($total_subscriptions === 0) {
+            return; // Silent return - no job, no notifications
+        }
+        
         // Generate unique job ID for detailed logging
         $job_id = uniqid('job_', true);
         update_option('mpsp_current_job_id', $job_id);
@@ -1020,10 +1029,6 @@ class MP_Stripe_Price_Updater {
         
         // Initialize detailed log for this job
         update_option('mpsp_detailed_job_log_' . $job_id, array());
-        
-        // Get matching subscriptions to determine total
-        $matching_subscriptions = $this->get_matching_subscriptions($rule);
-        $total_subscriptions = count($matching_subscriptions);
         
         // Safety check: Limit processing to prevent timeouts and server overload
         $max_per_run = apply_filters('mpsp_max_subscriptions_per_run', 25);
