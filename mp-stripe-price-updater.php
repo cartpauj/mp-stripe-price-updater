@@ -117,7 +117,13 @@ class MP_Stripe_Price_Updater {
         }
         
         // Check if there are any Stripe gateways configured
-        $gateways = $this->get_stripe_gateways();
+        $options  = MeprOptions::fetch();
+        $gateways = array_filter(
+            $options->payment_methods(false),
+            function ($gateway) {
+                return $gateway instanceof MeprStripeGateway;
+            }
+        );
         if (empty($gateways)) {
             ?>
             <div class="wrap">
@@ -149,13 +155,8 @@ class MP_Stripe_Price_Updater {
                                 <select name="mpsp_gateway_id" id="mpsp_gateway_id" required>
                                     <option value="">-- Select Gateway --</option>
                                     <?php
-                                    foreach ($gateways as $gateway_id => $gateway) {
-                                        // Create gateway instance to properly detect test mode
-                                        $temp_gateway = new MeprStripeGateway();
-                                        $temp_gateway->set_id($gateway_id);
-                                        
-                                        $mode_indicator = '';
-                                        if ($temp_gateway->is_test_mode()) {
+                                    foreach ($gateways as $gateway) {
+                                        if ($gateway->is_test_mode()) {
                                             if (defined('MEMBERPRESS_STRIPE_TESTING') && MEMBERPRESS_STRIPE_TESTING) {
                                                 $mode_indicator = ' (Global Test Mode)';
                                             } else {
@@ -164,7 +165,7 @@ class MP_Stripe_Price_Updater {
                                         } else {
                                             $mode_indicator = ' (Live Mode)';
                                         }
-                                        echo '<option value="' . esc_attr($gateway_id) . '">' . esc_html($gateway['label'] . $mode_indicator) . '</option>';
+                                        echo '<option value="' . esc_attr($gateway->id) . '">' . esc_html(($gateway->label ?: 'Stripe Gateway') . $mode_indicator) . '</option>';
                                     }
                                     ?>
                                 </select>
@@ -861,34 +862,6 @@ class MP_Stripe_Price_Updater {
         wp_send_json_error('Invalid request');
     }
     
-    private function get_stripe_gateways() {
-        $gateways = array();
-        
-        if (!class_exists('MeprOptions')) {
-            return $gateways;
-        }
-        
-        $options = MeprOptions::fetch();
-        
-        if (empty($options->integrations)) {
-            return $gateways;
-        }
-        
-        foreach ($options->integrations as $gateway_id => $integration) {
-            if ($integration['gateway'] === 'MeprStripeGateway') {
-                $gateways[$gateway_id] = array(
-                    'id' => $gateway_id,
-                    'label' => !empty($integration['label']) ? $integration['label'] : 'Stripe Gateway',
-                    'api_keys' => $integration['api_keys'] ?? array(),
-                    'test_mode' => !empty($integration['test_mode']),
-                    'sandbox' => !empty($integration['sandbox'])
-                );
-            }
-        }
-        
-        return $gateways;
-    }
-    
     private function get_memberships_with_active_subscriptions($gateway_id) {
         global $wpdb;
         
@@ -1355,14 +1328,13 @@ class MP_Stripe_Price_Updater {
             }
         }
     }
-    
-    
+
     private function update_stripe_subscription($subscription, $rule) {
         try {
-            // Get gateway configuration
-            $gateways = $this->get_stripe_gateways();
-            
-            if (!isset($gateways[$rule['gateway_id']])) {
+            $options = MeprOptions::fetch();
+            $gateway = $options->payment_method($rule['gateway_id']);
+
+            if (!$gateway instanceof MeprStripeGateway) {
                 return array('success' => false, 'message' => 'Gateway not found');
             }
             
@@ -1373,10 +1345,6 @@ class MP_Stripe_Price_Updater {
             if (empty($stripe_sub_id) || strpos($stripe_sub_id, 'sub_') !== 0) {
                 return array('success' => false, 'message' => 'Invalid Stripe subscription ID');
             }
-            
-            // Create MemberPress gateway instance for this specific gateway ID
-            $gateway = new MeprStripeGateway();
-            $gateway->set_id($rule['gateway_id']);
             
             // Determine API mode using MemberPress's proper test mode detection
             $use_test = $gateway->is_test_mode();
@@ -1691,8 +1659,16 @@ class MP_Stripe_Price_Updater {
     }
     
     private function get_gateway_label($gateway_id) {
-        $gateways = $this->get_stripe_gateways();
-        return isset($gateways[$gateway_id]) ? $gateways[$gateway_id]['label'] : 'Unknown Gateway';
+        $options = MeprOptions::fetch();
+        $pm = $options->payment_method($gateway_id);
+
+        if ($pm instanceof MeprStripeGateway) {
+            $label = $pm->label ?: 'Stripe Gateway';
+        } else {
+            $label = 'Unknown Gateway';
+        }
+
+        return $label;
     }
     
     public function add_cron_intervals($schedules) {
