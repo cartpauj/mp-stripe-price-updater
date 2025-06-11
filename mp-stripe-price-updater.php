@@ -47,11 +47,17 @@ class MP_Stripe_Price_Updater {
         
         // Cron setup
         add_action('mpsp_process_price_updates', array($this, 'process_price_updates'));
+        add_action('mpsp_cleanup_logs', array($this, 'cleanup_logs'));
         add_filter('cron_schedules', array($this, 'add_cron_intervals'));
         
         // Schedule cron if not already scheduled
         if (!wp_next_scheduled('mpsp_process_price_updates')) {
             wp_schedule_event(time(), 'every_5_minutes', 'mpsp_process_price_updates');
+        }
+        
+        // Schedule daily log cleanup
+        if (!wp_next_scheduled('mpsp_cleanup_logs')) {
+            wp_schedule_event(time(), 'daily', 'mpsp_cleanup_logs');
         }
         
         register_deactivation_hook(__FILE__, array($this, 'deactivate'));
@@ -1192,9 +1198,9 @@ class MP_Stripe_Price_Updater {
         $reports = get_option('mpsp_job_reports', array());
         $reports[] = $report;
         
-        // Keep only last 20 reports
-        if (count($reports) > 20) {
-            $reports = array_slice($reports, -20);
+        // Keep only last 15 reports
+        if (count($reports) > 15) {
+            $reports = array_slice($reports, -15);
         }
         
         update_option('mpsp_job_reports', $reports);
@@ -1483,9 +1489,9 @@ class MP_Stripe_Price_Updater {
             'updated_at' => current_time('mysql')
         );
         
-        // Keep only last 1000 entries
-        if (count($log) > 1000) {
-            $log = array_slice($log, -1000);
+        // Keep only last 500 entries
+        if (count($log) > 500) {
+            $log = array_slice($log, -500);
         }
         
         update_option('mpsp_price_update_log', $log);
@@ -1700,8 +1706,52 @@ class MP_Stripe_Price_Updater {
         return $schedules;
     }
     
+    public function cleanup_logs() {
+        try {
+            // Clean up price update log - keep only last 500 entries (reduced from 1000)
+            $log = get_option('mpsp_price_update_log', array());
+            if (count($log) > 500) {
+                $log = array_slice($log, -500);
+                update_option('mpsp_price_update_log', $log);
+            }
+            
+            // Clean up job reports - keep only last 15 entries (reduced from 20)  
+            $reports = get_option('mpsp_job_reports', array());
+            if (count($reports) > 15) {
+                $reports = array_slice($reports, -15);
+                update_option('mpsp_job_reports', $reports);
+            }
+            
+            // Clean up orphaned detailed job logs (in case cleanup failed)
+            global $wpdb;
+            $orphaned_logs = $wpdb->get_results(
+                "SELECT option_name FROM {$wpdb->options} 
+                 WHERE option_name LIKE 'mpsp_detailed_job_log_%' 
+                 LIMIT 50"
+            );
+            
+            foreach ($orphaned_logs as $option) {
+                delete_option($option->option_name);
+            }
+            
+            // Clean up any stuck job status older than 1 hour
+            $current_job = get_option('mpsp_current_job', null);
+            if ($current_job && !empty($current_job['started_at'])) {
+                $started_time = strtotime($current_job['started_at']);
+                if ($started_time && (time() - $started_time) > 3600) { // 1 hour
+                    delete_option('mpsp_current_job');
+                    delete_option('mpsp_current_job_id');
+                }
+            }
+            
+        } catch (Exception $e) {
+            error_log('MPSP log cleanup error: ' . $e->getMessage());
+        }
+    }
+    
     public function deactivate() {
         wp_clear_scheduled_hook('mpsp_process_price_updates');
+        wp_clear_scheduled_hook('mpsp_cleanup_logs');
     }
 }
 
