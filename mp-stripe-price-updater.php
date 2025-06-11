@@ -1489,10 +1489,7 @@ class MP_Stripe_Price_Updater {
             'updated_at' => current_time('mysql')
         );
         
-        // Keep only last 500 entries
-        if (count($log) > 500) {
-            $log = array_slice($log, -500);
-        }
+        // No artificial limit - entries will be cleaned up when job reports are cleaned up
         
         update_option('mpsp_price_update_log', $log);
     }
@@ -1708,16 +1705,41 @@ class MP_Stripe_Price_Updater {
     
     public function cleanup_logs() {
         try {
-            // Clean up price update log - keep only last 500 entries (reduced from 1000)
-            $log = get_option('mpsp_price_update_log', array());
-            if (count($log) > 500) {
-                $log = array_slice($log, -500);
-                update_option('mpsp_price_update_log', $log);
-            }
-            
-            // Clean up job reports - keep only last 15 entries (reduced from 20)  
+            // Clean up job reports - keep only last 15 entries
             $reports = get_option('mpsp_job_reports', array());
             if (count($reports) > 15) {
+                // Get timestamps of reports being removed to clean up corresponding price update log entries
+                $reports_to_remove = array_slice($reports, 0, count($reports) - 15);
+                $cutoff_times = array();
+                
+                foreach ($reports_to_remove as $report) {
+                    if (isset($report['started_at'])) {
+                        $cutoff_times[] = $report['started_at'];
+                    }
+                    if (isset($report['completed_at'])) {
+                        $cutoff_times[] = $report['completed_at'];
+                    }
+                }
+                
+                // Find the earliest timestamp from reports being removed
+                if (!empty($cutoff_times)) {
+                    $earliest_cutoff = min($cutoff_times);
+                    
+                    // Clean up price update log entries that correspond to removed job reports
+                    $price_log = get_option('mpsp_price_update_log', array());
+                    $filtered_log = array();
+                    
+                    foreach ($price_log as $entry) {
+                        // Keep entries that are newer than the earliest removed job report
+                        if (isset($entry['updated_at']) && $entry['updated_at'] >= $earliest_cutoff) {
+                            $filtered_log[] = $entry;
+                        }
+                    }
+                    
+                    update_option('mpsp_price_update_log', $filtered_log);
+                }
+                
+                // Keep only the last 15 job reports
                 $reports = array_slice($reports, -15);
                 update_option('mpsp_job_reports', $reports);
             }
