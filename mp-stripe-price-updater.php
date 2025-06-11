@@ -1398,25 +1398,25 @@ class MP_Stripe_Price_Updater {
             $item_id = $stripe_sub['items']['data'][0]['id'];
             $current_price = $stripe_sub['items']['data'][0]['price'];
             
-            // Create new price object in Stripe using MemberPress currency formatting
-            $stripe_amount = MeprStripeGateway::is_zero_decimal_currency() ? 
-                intval($rule['new_price']) : 
-                intval($rule['new_price'] * 100);
-            
-            $price_data = array(
-                'unit_amount' => $stripe_amount,
-                'currency' => strtolower($current_price['currency']),
-                'recurring' => array(
-                    'interval' => $current_price['recurring']['interval'],
-                    'interval_count' => $current_price['recurring']['interval_count']
-                ),
-                'product' => $current_price['product']
-            );
-            
-            $new_price = $this->stripe_api_request('POST', 'prices', $price_data, $api_key);
-            
-            if (!$new_price || !empty($new_price['error'])) {
-                return array('success' => false, 'message' => 'Failed to create new price: ' . ($new_price['error']['message'] ?? 'Unknown error'));
+            // Get or create Stripe price using MemberPress gateway method
+            try {
+                // Create a gateway instance for this specific gateway ID
+                $gateway = new MeprStripeGateway();
+                $gateway->set_id($rule['gateway_id']);
+                
+                // Get the product associated with this subscription
+                $product = new MeprProduct($subscription->product_id);
+                
+                // Use MemberPress method to get or create a price/plan ID
+                $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $rule['new_price']);
+                
+                if (empty($plan_id)) {
+                    return array('success' => false, 'message' => 'Failed to get or create Stripe price/plan');
+                }
+                
+                $new_price_id = $plan_id;
+            } catch (Exception $e) {
+                return array('success' => false, 'message' => 'Error creating Stripe price: ' . $e->getMessage());
             }
             
             // Update subscription with new price
@@ -1426,7 +1426,7 @@ class MP_Stripe_Price_Updater {
                 'items' => array(
                     array(
                         'id' => $item_id,
-                        'price' => $new_price['id']
+                        'price' => $new_price_id
                     )
                 ),
                 'proration_behavior' => 'none', // Disable prorations for price updates
@@ -1441,10 +1441,10 @@ class MP_Stripe_Price_Updater {
             
             // Verify the update was successful by checking the new price ID
             if (isset($updated_sub['items']['data'][0]['price']['id']) && 
-                $updated_sub['items']['data'][0]['price']['id'] === $new_price['id']) {
+                $updated_sub['items']['data'][0]['price']['id'] === $new_price_id) {
                 return array(
                     'success' => true, 
-                    'stripe_price_id' => $new_price['id'],
+                    'stripe_price_id' => $new_price_id,
                     'subscription_status' => $updated_sub['status'] ?? 'unknown',
                     'api_mode' => $use_test ? 'test' : 'live'
                 );
