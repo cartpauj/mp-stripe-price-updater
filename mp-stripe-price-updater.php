@@ -150,11 +150,17 @@ class MP_Stripe_Price_Updater {
                                     <option value="">-- Select Gateway --</option>
                                     <?php
                                     foreach ($gateways as $gateway_id => $gateway) {
+                                        // Create gateway instance to properly detect test mode
+                                        $temp_gateway = new MeprStripeGateway();
+                                        $temp_gateway->set_id($gateway_id);
+                                        
                                         $mode_indicator = '';
-                                        if (defined('MEMBERPRESS_STRIPE_TESTING') && MEMBERPRESS_STRIPE_TESTING) {
-                                            $mode_indicator = ' (Global Test Mode)';
-                                        } elseif (!empty($gateway['test_mode'])) {
-                                            $mode_indicator = ' (Test Mode)';
+                                        if ($temp_gateway->is_test_mode()) {
+                                            if (defined('MEMBERPRESS_STRIPE_TESTING') && MEMBERPRESS_STRIPE_TESTING) {
+                                                $mode_indicator = ' (Global Test Mode)';
+                                            } else {
+                                                $mode_indicator = ' (Test Mode)';
+                                            }
                                         } else {
                                             $mode_indicator = ' (Live Mode)';
                                         }
@@ -1361,15 +1367,6 @@ class MP_Stripe_Price_Updater {
             }
             
             // The MemberPress gateway will handle API key selection automatically
-            $gateway_config = $gateways[$rule['gateway_id']];
-            
-            // Determine API mode for logging purposes
-            $use_test = false;
-            if (defined('MEMBERPRESS_STRIPE_TESTING') && MEMBERPRESS_STRIPE_TESTING) {
-                $use_test = true;
-            } else {
-                $use_test = !empty($gateway_config['test_mode']) || !empty($gateway_config['sandbox']);
-            }
             
             $stripe_sub_id = $subscription->subscr_id;
             
@@ -1380,6 +1377,9 @@ class MP_Stripe_Price_Updater {
             // Create MemberPress gateway instance for this specific gateway ID
             $gateway = new MeprStripeGateway();
             $gateway->set_id($rule['gateway_id']);
+            
+            // Determine API mode using MemberPress's proper test mode detection
+            $use_test = $gateway->is_test_mode();
             
             // Get current subscription from Stripe using MemberPress gateway method
             $stripe_sub = $gateway->send_stripe_request("subscriptions/{$stripe_sub_id}", array(), 'get');
