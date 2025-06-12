@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MemberPress Stripe Price Updater
  * Plugin URI: https://memberpress.com/
- * Description: Automate subscription price changes for MemberPress Stripe subscriptions with proper MP integration
+ * Description: Automate subscription price changes for MemberPress Stripe subscriptions.
  * Version: 2.0.0
  * Author: MemberPress
  * License: GPL v2 or later
