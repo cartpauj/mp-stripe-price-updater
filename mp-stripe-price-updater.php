@@ -1,10 +1,10 @@
 <?php
 /**
  * Plugin Name: MemberPress Stripe Price Updater
- * Plugin URI: https://yoursite.com/
+ * Plugin URI: https://memberpress.com/
  * Description: Automate subscription price changes for MemberPress Stripe subscriptions with proper MP integration
  * Version: 2.0.0
- * Author: Your Name
+ * Author: MemberPress
  * License: GPL v2 or later
  */
 
@@ -31,7 +31,7 @@ class MP_Stripe_Price_Updater {
     }
     
     private function __construct() {
-        add_action('init', array($this, 'init'));
+        add_action('admin_init', array($this, 'admin_init'));
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('admin_enqueue_scripts', array($this, 'admin_scripts'));
         
@@ -62,8 +62,8 @@ class MP_Stripe_Price_Updater {
         
         register_deactivation_hook(__FILE__, array($this, 'deactivate'));
     }
-    
-    public function init() {
+
+    public function admin_init() {
         // Check if MemberPress is active
         if (!class_exists('MeprOptions') || !class_exists('MeprSubscription')) {
             add_action('admin_notices', array($this, 'memberpress_missing_notice'));
@@ -1337,17 +1337,12 @@ class MP_Stripe_Price_Updater {
             if (!$gateway instanceof MeprStripeGateway) {
                 return array('success' => false, 'message' => 'Gateway not found');
             }
-            
-            // The MemberPress gateway will handle API key selection automatically
-            
+
             $stripe_sub_id = $subscription->subscr_id;
             
             if (empty($stripe_sub_id) || strpos($stripe_sub_id, 'sub_') !== 0) {
                 return array('success' => false, 'message' => 'Invalid Stripe subscription ID');
             }
-            
-            // Determine API mode using MemberPress's proper test mode detection
-            $use_test = $gateway->is_test_mode();
             
             // Get current subscription from Stripe using MemberPress gateway method
             $stripe_sub = $gateway->send_stripe_request("subscriptions/{$stripe_sub_id}", array(), 'get');
@@ -1361,7 +1356,6 @@ class MP_Stripe_Price_Updater {
             }
             
             $item_id = $stripe_sub['items']['data'][0]['id'];
-            $current_price = $stripe_sub['items']['data'][0]['price'];
             
             // Check currency compatibility before proceeding
             $stripe_currency = strtoupper($stripe_sub['currency'] ?? '');
@@ -1418,7 +1412,7 @@ class MP_Stripe_Price_Updater {
                     'success' => true, 
                     'stripe_price_id' => $new_price_id,
                     'subscription_status' => $updated_sub['status'] ?? 'unknown',
-                    'api_mode' => $use_test ? 'test' : 'live'
+                    'api_mode' => $gateway->is_test_mode() ? 'test' : 'live'
                 );
             } else {
                 return array('success' => false, 'message' => 'Subscription update verification failed - price not updated correctly');
