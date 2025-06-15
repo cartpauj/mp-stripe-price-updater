@@ -73,24 +73,25 @@ jobs:
         cp mp-stripe-price-updater.php mp-stripe-price-updater/
         cp LICENSE mp-stripe-price-updater/
     
+    - name: Check if zip already exists in repo
+      id: check_zip
+      run: |
+        ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
+        if git ls-files --error-unmatch "$ZIP_NAME" > /dev/null 2>&1; then
+          echo "ZIP_EXISTS=true" >> $GITHUB_OUTPUT
+          echo "Zip file already exists in git, skipping commit"
+        else
+          echo "ZIP_EXISTS=false" >> $GITHUB_OUTPUT
+          echo "Zip file does not exist in git, will create"
+        fi
+    
     - name: Create release zip
+      if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
       run: |
         ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
         zip -r "$ZIP_NAME" mp-stripe-price-updater/
         echo "Created: $ZIP_NAME"
         ls -la "$ZIP_NAME"
-    
-    - name: Check if zip already exists in repo
-      id: check_zip
-      run: |
-        ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
-        if [ -f "$ZIP_NAME" ]; then
-          echo "ZIP_EXISTS=true" >> $GITHUB_OUTPUT
-          echo "Zip file already exists, skipping commit"
-        else
-          echo "ZIP_EXISTS=false" >> $GITHUB_OUTPUT
-          echo "Zip file does not exist, will create"
-        fi
     
     - name: Commit and push release zip
       if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
