@@ -12,6 +12,11 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     
+    # Required permissions for the workflow
+    permissions:
+      contents: write
+      releases: write
+    
     # Skip if commit message contains [ci skip] or [skip ci]
     if: "!contains(github.event.head_commit.message, '[ci skip]') && !contains(github.event.head_commit.message, '[skip ci]')"
     
@@ -21,6 +26,7 @@ jobs:
       with:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
+        persist-credentials: true
     
     - name: Extract version from plugin file
       id: version
