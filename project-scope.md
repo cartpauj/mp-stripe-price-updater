@@ -499,3 +499,144 @@ if (!empty($rule['processed_count']) && $rule['processed_count'] > 0) {
 - **Performance Metrics**: Documented reduction in unnecessary API calls and server load
 
 This critical fix transforms the plugin from a functional but inefficient system into a truly production-ready, self-managing solution that properly handles rule lifecycle management and resource conservation. The improvements ensure that price update campaigns complete cleanly without ongoing maintenance overhead or unnecessary resource consumption.
+
+## Automated Release Pipeline Implementation (June 2025)
+
+Following the critical bug fixes, a comprehensive automated release pipeline was implemented to streamline plugin development, versioning, and distribution workflows.
+
+### GitHub Actions Workflow Architecture
+
+#### 1. **Automated Version Management**
+- **Semantic Versioning**: Implements automatic patch version increments (1.0.5 → 1.0.6 → 1.0.7)
+- **Dual Version Updates**: Synchronizes both plugin header version and MPSP_VERSION constant
+- **Version Extraction**: Dynamically reads current version from plugin file using regex patterns
+- **Mathematical Increment**: Parses major.minor.patch and increments patch number automatically
+
+#### 2. **Intelligent Trigger System**
+- **Path-Based Triggers**: Only activates when `mp-stripe-price-updater.php` is modified
+- **Manual Override**: Supports `workflow_dispatch` for manual release triggering
+- **CI Skip Protection**: Prevents infinite loops using `[ci skip]` flags in commit messages
+- **Branch Targeting**: Exclusively monitors main branch for production releases
+
+#### 3. **Automated File Updates**
+- **Plugin Header Synchronization**: Updates `* Version: X.X.X` comment in plugin file
+- **Constant Synchronization**: Updates `define('MPSP_VERSION', 'X.X.X')` programmatically
+- **Sed-Based Processing**: Uses reliable regex substitution for precise version replacement
+- **Change Verification**: Validates updates with grep confirmation checks
+
+#### 4. **Release Package Generation**
+- **WordPress-Ready Structure**: Creates `mp-stripe-price-updater/` folder containing plugin files
+- **Dual File Inclusion**: Packages both `mp-stripe-price-updater.php` and `LICENSE` files
+- **Version-Named Archives**: Generates `mp-stripe-price-updater-vX.X.X.zip` format
+- **Installation-Ready**: Direct WordPress plugin upload compatibility
+
+#### 5. **Repository Integration**
+- **Atomic Commits**: Single commit containing both version bump and release zip
+- **Descriptive Messages**: Clear commit messages showing version progression
+- **Branch Protection**: Uses `[ci skip]` to prevent workflow recursion
+- **Git Automation**: Configures proper git identity for automated commits
+
+#### 6. **GitHub Release Management**
+- **Tagged Releases**: Creates git tags following `vX.X.X` convention
+- **Release Documentation**: Auto-generates installation instructions and requirements
+- **Asset Attachment**: Uploads zip file as downloadable release asset
+- **Metadata Inclusion**: Records commit SHA and generation timestamp
+
+### Technical Implementation Details
+
+#### Version Bump Logic
+```bash
+# Extract current version components
+MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+
+# Increment patch version
+NEW_PATCH=$((PATCH + 1))
+NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+```
+
+#### File Update Process
+```bash
+# Update plugin header version
+sed -i "s/^\(\s*\*\s*Version:\s*\)$CURRENT_VERSION\(.*\)$/\1$NEW_VERSION\2/" mp-stripe-price-updater.php
+
+# Update VERSION constant
+sed -i "s/define('MPSP_VERSION', '$CURRENT_VERSION')/define('MPSP_VERSION', '$NEW_VERSION')/" mp-stripe-price-updater.php
+```
+
+#### Release Archive Structure
+```
+mp-stripe-price-updater-v1.0.6.zip
+├── mp-stripe-price-updater/
+│   ├── mp-stripe-price-updater.php
+│   └── LICENSE
+```
+
+### Workflow Permissions and Security
+
+#### GitHub Token Configuration
+- **Contents Write**: Enables repository file modifications and commits
+- **Persist Credentials**: Maintains authentication for git operations
+- **Checkout Depth**: Full history access for proper versioning context
+- **Branch Protection Bypass**: Automated commits respect protection rules
+
+#### Security Measures
+- **Token Scope Limitation**: Minimal required permissions for workflow execution
+- **CI Skip Implementation**: Prevents infinite workflow triggering loops
+- **Path Filtering**: Restricts execution to actual plugin file changes
+- **Manual Override**: Allows controlled manual execution when needed
+
+### Development Workflow Integration
+
+#### Continuous Release Process
+1. **Developer commits** changes to `mp-stripe-price-updater.php`
+2. **Workflow triggers** automatically on main branch push
+3. **Version increments** automatically (patch level)
+4. **Plugin file updates** with new version numbers
+5. **Release zip generates** with updated files
+6. **Repository commits** both updated plugin and zip file
+7. **GitHub release creates** with versioned tag and downloadable asset
+
+#### Quality Assurance Benefits
+- **Consistent Versioning**: Eliminates manual version management errors
+- **Immediate Distribution**: Release packages available immediately after development
+- **Audit Trail**: Complete history of all version changes and releases
+- **Developer Efficiency**: Removes manual packaging and release overhead
+
+### Production Deployment Impact
+
+#### Plugin Distribution
+- **WordPress Compatibility**: Direct upload capability through WordPress admin
+- **Version Clarity**: Clear version progression visible in release history
+- **Download Accessibility**: GitHub Releases page provides easy access
+- **Installation Documentation**: Auto-generated setup instructions
+
+#### Maintenance Reduction
+- **Zero Manual Packaging**: Eliminates need for manual zip creation
+- **Automatic Documentation**: Release notes generate automatically
+- **Version Synchronization**: Prevents version mismatch issues
+- **Release Consistency**: Standardized release format and structure
+
+#### Scalability Advantages
+- **Frequent Releases**: Supports rapid iteration and deployment cycles
+- **Branch Strategy**: Compatible with feature branch workflows
+- **Rollback Capability**: Tagged releases enable easy rollback identification
+- **Distribution Automation**: Enables automatic deployment pipeline extensions
+
+### Future Enhancement Opportunities
+
+#### Advanced Workflow Features
+- **Semantic Version Control**: Major/minor version bump triggers based on commit messages
+- **Release Notes Generation**: Automatic changelog creation from commit history
+- **Multi-Environment Support**: Separate staging and production release tracks
+- **Integration Testing**: Automated plugin validation before release
+- **Distribution Expansion**: WordPress.org plugin directory automation
+
+#### Quality Assurance Integration
+- **Automated Testing**: Plugin functionality verification before release
+- **Code Quality Checks**: Linting and standards validation
+- **Security Scanning**: Vulnerability assessment in release pipeline
+- **Performance Monitoring**: Release impact tracking and metrics
+
+This automated release pipeline transforms plugin development from a manual, error-prone process into a streamlined, professional development workflow that ensures consistent, reliable releases while maintaining complete version control and distribution automation.
