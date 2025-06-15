@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'mp-stripe-price-updater.php'
-      - 'LICENSE'
+  workflow_dispatch: # Allow manual triggering
 
 jobs:
   build-and-release:
