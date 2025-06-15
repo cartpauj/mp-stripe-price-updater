@@ -1118,6 +1118,21 @@ class MP_Stripe_Price_Updater {
             wp_send_json_error('Failed to save rule');
         }
         
+        // Get the newly created rule ID and immediately start processing
+        $rule_id = $wpdb->insert_id;
+        $rule = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}mpsp_rules WHERE id = %d", 
+            $rule_id
+        ), ARRAY_A);
+        
+        // Immediately start a job for this new rule to show progress UI
+        if ($rule) {
+            $matching_subscriptions = $this->get_matching_subscriptions($rule);
+            if (count($matching_subscriptions) > 0) {
+                $this->start_new_job($rule, $matching_subscriptions, 1); // Process just 1 subscription immediately
+            }
+        }
+        
         wp_send_json_success();
     }
     
@@ -1643,7 +1658,7 @@ class MP_Stripe_Price_Updater {
         }
     }
     
-    private function start_new_job($rule, $all_matching_subscriptions) {
+    private function start_new_job($rule, $all_matching_subscriptions, $max_to_process = null) {
         global $wpdb;
         
         $total_subscriptions = count($all_matching_subscriptions);
@@ -1654,7 +1669,11 @@ class MP_Stripe_Price_Updater {
         }
         
         // Safety check: Limit processing to prevent timeouts and server overload
-        $max_per_run = apply_filters('mpsp_max_subscriptions_per_run', 25);
+        if ($max_to_process === null) {
+            $max_per_run = apply_filters('mpsp_max_subscriptions_per_run', 25);
+        } else {
+            $max_per_run = $max_to_process;
+        }
         $subscriptions_to_process = array_slice($all_matching_subscriptions, 0, $max_per_run);
         
         // Create job in database with TOTAL subscription count, not just the batch
