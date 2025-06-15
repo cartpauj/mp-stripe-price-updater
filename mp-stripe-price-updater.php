@@ -1597,44 +1597,75 @@ class MP_Stripe_Price_Updater {
         $subscription = $subscription_data['subscription'];
         $user = $subscription_data['user'];
         $status = 'error';
-        $error_message = null;
+        $error_message = 'Processing started';
+        $stripe_price_id = null;
+        $api_mode = 'unknown';
+        
+        // Always create an entry first, then update it
+        $entry_result = $wpdb->insert(
+            $wpdb->prefix . 'mpsp_entries',
+            array(
+                'job_id' => $job_id,
+                'subscription_id' => $subscription->id,
+                'user_id' => $user->ID,
+                'old_price' => $subscription->price,
+                'new_price' => $rule['new_price'],
+                'status' => 'processing',
+                'stripe_price_id' => null,
+                'api_mode' => 'unknown',
+                'error_message' => 'Processing started',
+                'processed_at' => current_time('mysql')
+            ),
+            array('%d', '%d', '%d', '%f', '%f', '%s', '%s', '%s', '%s', '%s')
+        );
+        
+        if ($entry_result === false) {
+            error_log('MPSP: Failed to create initial entry: ' . $wpdb->last_error);
+            return;
+        }
+        
+        $entry_id = $wpdb->insert_id;
         
         try {
-            // Update in Stripe first
-            $stripe_result = $this->update_stripe_subscription($subscription, $rule);
-            
-            if ($stripe_result['success']) {
-                // Update in MemberPress
-                $mp_result = $this->update_memberpress_subscription($subscription, $rule);
+            // Check if MemberPress is available
+            if (!class_exists('MeprOptions') || !class_exists('MeprSubscription')) {
+                $error_message = 'MemberPress not available during AJAX processing';
+            } else {
+                // Update in Stripe first
+                $stripe_result = $this->update_stripe_subscription($subscription, $rule);
                 
-                if ($mp_result['success']) {
-                    $status = 'success';
-                    $error_message = null;
+                if ($stripe_result['success']) {
+                    // Update in MemberPress
+                    $mp_result = $this->update_memberpress_subscription($subscription, $rule);
+                    
+                    if ($mp_result['success']) {
+                        $status = 'success';
+                        $error_message = null;
+                        $stripe_price_id = $stripe_result['stripe_price_id'] ?? null;
+                        $api_mode = $stripe_result['api_mode'] ?? 'unknown';
+                    } else {
+                        $status = 'error';
+                        $error_message = 'MemberPress update failed: ' . $mp_result['message'];
+                    }
                 } else {
                     $status = 'error';
-                    $error_message = 'MemberPress update failed: ' . $mp_result['message'];
+                    $error_message = 'Stripe update failed: ' . $stripe_result['message'];
                 }
-            } else {
-                $status = 'error';
-                $error_message = 'Stripe update failed: ' . $stripe_result['message'];
             }
             
-            // Create entry in database
-            $wpdb->insert(
+            // Update the entry with final results
+            $wpdb->update(
                 $wpdb->prefix . 'mpsp_entries',
                 array(
-                    'job_id' => $job_id,
-                    'subscription_id' => $subscription->id,
-                    'user_id' => $user->ID,
-                    'old_price' => $subscription->price,
-                    'new_price' => $rule['new_price'],
                     'status' => $status,
-                    'stripe_price_id' => $stripe_result['stripe_price_id'] ?? null,
-                    'api_mode' => $stripe_result['api_mode'] ?? 'unknown',
+                    'stripe_price_id' => $stripe_price_id,
+                    'api_mode' => $api_mode,
                     'error_message' => $error_message,
                     'processed_at' => current_time('mysql')
                 ),
-                array('%d', '%d', '%d', '%f', '%f', '%s', '%s', '%s', '%s', '%s')
+                array('id' => $entry_id),
+                array('%s', '%s', '%s', '%s', '%s'),
+                array('%d')
             );
             
             // Update job progress
@@ -1652,22 +1683,17 @@ class MP_Stripe_Price_Updater {
             );
             
         } catch (Exception $e) {
-            // Create error entry
-            $wpdb->insert(
+            // Update the existing entry with exception details
+            $wpdb->update(
                 $wpdb->prefix . 'mpsp_entries',
                 array(
-                    'job_id' => $job_id,
-                    'subscription_id' => $subscription->id,
-                    'user_id' => $user->ID,
-                    'old_price' => $subscription->price,
-                    'new_price' => $rule['new_price'],
                     'status' => 'error',
-                    'stripe_price_id' => null,
-                    'api_mode' => 'unknown',
                     'error_message' => 'Exception: ' . $e->getMessage(),
                     'processed_at' => current_time('mysql')
                 ),
-                array('%d', '%d', '%d', '%f', '%f', '%s', '%s', '%s', '%s', '%s')
+                array('id' => $entry_id),
+                array('%s', '%s', '%s'),
+                array('%d')
             );
             
             // Update job progress with error
