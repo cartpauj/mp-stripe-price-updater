@@ -15,7 +15,6 @@ jobs:
     # Required permissions for the workflow
     permissions:
       contents: write
-      releases: write
     
     # Skip if commit message contains [ci skip] or [skip ci]
     if: "!contains(github.event.head_commit.message, '[ci skip]') && !contains(github.event.head_commit.message, '[skip ci]')"
