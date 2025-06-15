@@ -27,21 +27,52 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         persist-credentials: true
     
-    - name: Extract version from plugin file
+    - name: Extract and bump version
       id: version
       run: |
         if [ -f "mp-stripe-price-updater.php" ]; then
-          VERSION=$(grep -E "^\s*\*\s*Version:\s*" mp-stripe-price-updater.php | sed -E 's/^\s*\*\s*Version:\s*([0-9]+\.[0-9]+\.[0-9]+).*$/\1/')
-          if [ -z "$VERSION" ]; then
+          CURRENT_VERSION=$(grep -E "^\s*\*\s*Version:\s*" mp-stripe-price-updater.php | sed -E 's/^\s*\*\s*Version:\s*([0-9]+\.[0-9]+\.[0-9]+).*$/\1/')
+          if [ -z "$CURRENT_VERSION" ]; then
             echo "Error: Could not extract version from mp-stripe-price-updater.php"
             exit 1
           fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "Found version: $VERSION"
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Extract major, minor, patch
+          MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+          MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+          
+          # Bump patch version
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+          
+          echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Bumped version: $CURRENT_VERSION → $NEW_VERSION"
         else
           echo "Error: mp-stripe-price-updater.php not found"
           exit 1
         fi
+    
+    - name: Update plugin file with new version
+      run: |
+        NEW_VERSION="${{ steps.version.outputs.VERSION }}"
+        CURRENT_VERSION="${{ steps.version.outputs.CURRENT_VERSION }}"
+        
+        # Update plugin header version
+        sed -i "s/^\(\s*\*\s*Version:\s*\)$CURRENT_VERSION\(.*\)$/\1$NEW_VERSION\2/" mp-stripe-price-updater.php
+        
+        # Update the VERSION constant if it exists
+        sed -i "s/define('MPSP_VERSION', '$CURRENT_VERSION')/define('MPSP_VERSION', '$NEW_VERSION')/" mp-stripe-price-updater.php
+        
+        echo "Updated plugin file:"
+        echo "- Header version: $CURRENT_VERSION → $NEW_VERSION"
+        echo "- Constant version: $CURRENT_VERSION → $NEW_VERSION"
+        
+        # Verify the changes
+        grep -E "^\s*\*\s*Version:\s*" mp-stripe-price-updater.php || echo "Header version not found"
+        grep "define('MPSP_VERSION'" mp-stripe-price-updater.php || echo "Constant version not found"
     
     - name: Check if LICENSE file exists
       run: |
@@ -78,28 +109,14 @@ jobs:
         cp mp-stripe-price-updater.php mp-stripe-price-updater/
         cp LICENSE mp-stripe-price-updater/
     
-    - name: Check if zip already exists in repo
-      id: check_zip
-      run: |
-        ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
-        if git ls-files --error-unmatch "$ZIP_NAME" > /dev/null 2>&1; then
-          echo "ZIP_EXISTS=true" >> $GITHUB_OUTPUT
-          echo "Zip file already exists in git, skipping commit"
-        else
-          echo "ZIP_EXISTS=false" >> $GITHUB_OUTPUT
-          echo "Zip file does not exist in git, will create"
-        fi
-    
     - name: Create release zip
-      if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
       run: |
         ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
         zip -r "$ZIP_NAME" mp-stripe-price-updater/
         echo "Created: $ZIP_NAME"
         ls -la "$ZIP_NAME"
     
-    - name: Commit and push release zip
-      if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
+    - name: Commit and push updated plugin and zip
       run: |
         ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
         
@@ -107,18 +124,18 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         
-        # Add the zip file
-        git add "$ZIP_NAME"
+        # Add both the updated plugin file and the new zip
+        git add mp-stripe-price-updater.php "$ZIP_NAME"
         
         # Check if there are changes to commit
         if git diff --staged --quiet; then
           echo "No changes to commit"
         else
           # Commit with CI skip flag
-          git commit -m "Auto-release: Add $ZIP_NAME [ci skip]
+          git commit -m "Auto-release v${{ steps.version.outputs.VERSION }}: Bump version and add release zip [ci skip]
 
+          Version: ${{ steps.version.outputs.CURRENT_VERSION }} → ${{ steps.version.outputs.VERSION }}
           Generated from commit: ${{ github.sha }}
-          Plugin version: ${{ steps.version.outputs.VERSION }}
           
           This zip contains:
           - mp-stripe-price-updater.php (main plugin file)
@@ -133,7 +150,6 @@ jobs:
     
     - name: Create GitHub Release
       id: create_release
-      if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -164,7 +180,6 @@ jobs:
         prerelease: false
     
     - name: Upload Release Asset
-      if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -182,7 +197,8 @@ jobs:
     - name: Summary
       run: |
         echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- **Version:** ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Previous Version:** ${{ steps.version.outputs.CURRENT_VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **New Version:** ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Zip File:** mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip" >> $GITHUB_STEP_SUMMARY
         echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Status:** $([ '${{ steps.check_zip.outputs.ZIP_EXISTS }}' = 'false' ] && echo 'Created new release' || echo 'Zip already exists, skipped')" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status:** Successfully created new patch release" >> $GITHUB_STEP_SUMMARY
