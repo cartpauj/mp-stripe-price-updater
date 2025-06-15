@@ -77,9 +77,21 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 - Performance optimization with strategic indexing
 - Future-proof integration patterns with MemberPress
 
+## Recent Improvements
+
+### Progress UI Enhancement  
+- **Issue**: Job progress UI not showing after saving new rules (jobs only created by cron every 5 minutes)
+- **Solution**: Immediate job initiation after rule creation
+  - Modified `ajax_save_rule()` to return rule ID
+  - Added `ajax_start_rule_processing()` endpoint  
+  - Enhanced `start_new_job()` to accept dynamic subscription count
+  - Added sessionStorage-based post-reload processing trigger
+- **Flow**: Save rule → page refresh → auto-start job with 1 subscription → show progress UI → cron continues processing
+
 ## Key Learnings for Future Sessions
 1. **Job Management**: Each rule represents one complete processing campaign, not multiple jobs
 2. **Database Migration**: All operational data moved from `wp_options` to custom tables
 3. **Critical Bug**: Fixed infinite job creation every 5 minutes vs proper job continuation
 4. **Security**: All database operations use prepared statements
 5. **Integration**: Leverage MemberPress native methods instead of custom implementations
+6. **UI Responsiveness**: Immediate feedback requires post-save processing triggers, not blocking operations
