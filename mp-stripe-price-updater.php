@@ -307,73 +307,99 @@ class MP_Stripe_Price_Updater {
         </div>
         
         <style>
-        /* Table Responsiveness */
+        /* Base Table Container */
         .mpsp-table-container {
             overflow-x: auto;
             margin: 20px 0;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             border-radius: 4px;
+            background: white;
+            border: 1px solid #ddd;
         }
 
         .mpsp-table-container .wp-list-table {
-            min-width: 800px;
             margin: 0;
+            border: none;
+            font-size: 13px;
         }
 
-        /* Column Width Management */
-        .mpsp-rules-table th:nth-child(1) { width: 15%; min-width: 120px; } /* Rule Name */
-        .mpsp-rules-table th:nth-child(2) { width: 8%; min-width: 80px; } /* Status */
-        .mpsp-rules-table th:nth-child(3) { width: 12%; min-width: 100px; } /* Gateway */
-        .mpsp-rules-table th:nth-child(4) { width: 15%; min-width: 120px; } /* Membership */
-        .mpsp-rules-table th:nth-child(5) { width: 12%; min-width: 100px; } /* Price Filter */
-        .mpsp-rules-table th:nth-child(6) { width: 10%; min-width: 90px; } /* Billing Filter */
-        .mpsp-rules-table th:nth-child(7) { width: 8%; min-width: 70px; } /* New Price */
-        .mpsp-rules-table th:nth-child(8) { width: 8%; min-width: 80px; } /* Created */
-        .mpsp-rules-table th:nth-child(9) { width: 10%; min-width: 90px; } /* Last Processed */
-        .mpsp-rules-table th:nth-child(10) { width: 6%; min-width: 50px; } /* Count */
-        .mpsp-rules-table th:nth-child(11) { width: 16%; min-width: 140px; } /* Actions */
+        /* Rules Table - 9 columns */
+        .mpsp-rules-table {
+            min-width: 1200px;
+        }
+        .mpsp-rules-table th:nth-child(1) { width: 18%; min-width: 150px; } /* Rule Name */
+        .mpsp-rules-table th:nth-child(2) { width: 10%; min-width: 100px; } /* Status */
+        .mpsp-rules-table th:nth-child(3) { width: 12%; min-width: 120px; } /* Gateway */
+        .mpsp-rules-table th:nth-child(4) { width: 15%; min-width: 140px; } /* Membership */
+        .mpsp-rules-table th:nth-child(5) { width: 12%; min-width: 110px; } /* Price Filter */
+        .mpsp-rules-table th:nth-child(6) { width: 10%; min-width: 100px; } /* Billing Filter */
+        .mpsp-rules-table th:nth-child(7) { width: 8%; min-width: 80px; } /* New Price */
+        .mpsp-rules-table th:nth-child(8) { width: 8%; min-width: 90px; } /* Created */
+        .mpsp-rules-table th:nth-child(9) { width: 7%; min-width: 60px; } /* Jobs */
+        .mpsp-rules-table th:nth-child(10) { width: 15%; min-width: 140px; } /* Actions */
 
-        .mpsp-log-table th:nth-child(1) { width: 15%; min-width: 140px; } /* Date */
+        /* Jobs Table - 9 columns */
+        .mpsp-reports-table {
+            min-width: 1100px;
+        }
+        .mpsp-reports-table th:nth-child(1) { width: 8%; min-width: 80px; } /* Job ID */
+        .mpsp-reports-table th:nth-child(2) { width: 20%; min-width: 160px; } /* Rule Name */
+        .mpsp-reports-table th:nth-child(3) { width: 10%; min-width: 90px; } /* Status */
+        .mpsp-reports-table th:nth-child(4) { width: 15%; min-width: 130px; } /* Started */
+        .mpsp-reports-table th:nth-child(5) { width: 15%; min-width: 130px; } /* Completed */
+        .mpsp-reports-table th:nth-child(6) { width: 8%; min-width: 70px; } /* Processed */
+        .mpsp-reports-table th:nth-child(7) { width: 8%; min-width: 70px; } /* Success */
+        .mpsp-reports-table th:nth-child(8) { width: 8%; min-width: 70px; } /* Errors */
+        .mpsp-reports-table th:nth-child(9) { width: 18%; min-width: 150px; } /* Actions */
+
+        /* Log Table - 6 columns */
+        .mpsp-log-table {
+            min-width: 900px;
+        }
+        .mpsp-log-table th:nth-child(1) { width: 18%; min-width: 150px; } /* Date */
         .mpsp-log-table th:nth-child(2) { width: 12%; min-width: 100px; } /* Subscription ID */
-        .mpsp-log-table th:nth-child(3) { width: 12%; min-width: 90px; } /* Old Price */
-        .mpsp-log-table th:nth-child(4) { width: 12%; min-width: 90px; } /* New Price */
+        .mpsp-log-table th:nth-child(3) { width: 10%; min-width: 90px; } /* Old Price */
+        .mpsp-log-table th:nth-child(4) { width: 10%; min-width: 90px; } /* New Price */
         .mpsp-log-table th:nth-child(5) { width: 10%; min-width: 80px; } /* Status */
-        .mpsp-log-table th:nth-child(6) { width: 39%; min-width: 200px; } /* Message */
+        .mpsp-log-table th:nth-child(6) { width: 40%; min-width: 200px; } /* Message */
 
-        .mpsp-reports-table th:nth-child(1) { width: 12%; min-width: 100px; } /* Job ID */
-        .mpsp-reports-table th:nth-child(2) { width: 20%; min-width: 150px; } /* Rule Name */
-        .mpsp-reports-table th:nth-child(3) { width: 15%; min-width: 140px; } /* Started */
-        .mpsp-reports-table th:nth-child(4) { width: 15%; min-width: 140px; } /* Completed */
-        .mpsp-reports-table th:nth-child(5) { width: 10%; min-width: 80px; } /* Processed */
-        .mpsp-reports-table th:nth-child(6) { width: 8%; min-width: 60px; } /* Errors */
-        .mpsp-reports-table th:nth-child(7) { width: 20%; min-width: 120px; } /* Actions */
-
-        /* Text Truncation for Long Content */
+        /* Text Content Management */
         .mpsp-table-container td {
             word-wrap: break-word;
-            max-width: 250px;
+            vertical-align: top;
+            padding: 12px 8px;
+        }
+
+        .mpsp-table-container th {
+            padding: 12px 8px;
+            font-weight: 600;
+            background: #f9f9f9;
+            border-bottom: 2px solid #ddd;
         }
 
         .mpsp-truncate {
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            max-width: 150px;
+            display: block;
+            max-width: 100%;
         }
 
         /* Action Buttons */
         .mpsp-rule-actions {
-            white-space: nowrap;
             display: flex;
-            gap: 5px;
+            gap: 4px;
             flex-wrap: wrap;
+            align-items: flex-start;
         }
 
         .mpsp-rule-actions .button {
             font-size: 11px;
-            height: 26px;
-            line-height: 24px;
+            height: 24px;
+            line-height: 22px;
             padding: 0 8px;
+            margin: 0;
+            white-space: nowrap;
             flex-shrink: 0;
         }
 
@@ -396,6 +422,66 @@ class MP_Stripe_Price_Updater {
         .mpsp-status-error {
             color: #dc3232;
             font-weight: 600;
+        }
+
+        /* Mobile Responsiveness */
+        @media screen and (max-width: 1200px) {
+            .mpsp-table-container {
+                font-size: 12px;
+            }
+            
+            .mpsp-table-container th,
+            .mpsp-table-container td {
+                padding: 8px 6px;
+            }
+            
+            .mpsp-rule-actions .button {
+                font-size: 10px;
+                height: 22px;
+                line-height: 20px;
+                padding: 0 6px;
+            }
+        }
+
+        @media screen and (max-width: 768px) {
+            .mpsp-table-container {
+                font-size: 11px;
+                border-radius: 0;
+                margin: 10px 0;
+            }
+            
+            .mpsp-table-container th,
+            .mpsp-table-container td {
+                padding: 6px 4px;
+            }
+            
+            .mpsp-truncate {
+                max-width: 80px;
+            }
+            
+            .mpsp-rule-actions {
+                flex-direction: column;
+                gap: 2px;
+            }
+            
+            .mpsp-rule-actions .button {
+                font-size: 9px;
+                height: 20px;
+                line-height: 18px;
+                padding: 0 4px;
+                width: 100%;
+                text-align: center;
+            }
+        }
+
+        /* Table hover effects */
+        .mpsp-table-container .wp-list-table tbody tr:hover {
+            background-color: #f9f9f9;
+        }
+        
+        /* Ensure tables scroll smoothly */
+        .mpsp-table-container {
+            -webkit-overflow-scrolling: touch;
         }
 
         /* Preview Table */
@@ -2322,21 +2408,19 @@ class MP_Stripe_Price_Updater {
                                 <?php echo intval($job['error_count']); ?>
                             </span>
                         </td>
-                        <td>
+                        <td class="mpsp-rule-actions">
                             <button class="button button-small view-job-entries" 
                                     data-job-id="<?php echo esc_attr($job['id']); ?>">
                                 View Log
                             </button>
                             <?php if ($job['status'] === 'completed' && $job['processed_count'] > 0): ?>
                             <button class="button button-small download-csv-report" 
-                                    data-job-id="<?php echo esc_attr($job['id']); ?>"
-                                    style="margin-left: 5px;">
+                                    data-job-id="<?php echo esc_attr($job['id']); ?>">
                                 Download CSV
                             </button>
                             <?php endif; ?>
                             <button class="button button-small delete-job" 
-                                    data-job-id="<?php echo esc_attr($job['id']); ?>"
-                                    style="margin-left: 5px;">
+                                    data-job-id="<?php echo esc_attr($job['id']); ?>">
                                 Delete
                             </button>
                         </td>
