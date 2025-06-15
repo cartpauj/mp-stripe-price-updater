@@ -298,28 +298,183 @@ class MP_Stripe_Price_Updater {
         </div>
         
         <style>
+        /* Table Responsiveness */
+        .mpsp-table-container {
+            overflow-x: auto;
+            margin: 20px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border-radius: 4px;
+        }
+
+        .mpsp-table-container .wp-list-table {
+            min-width: 800px;
+            margin: 0;
+        }
+
+        /* Column Width Management */
+        .mpsp-rules-table th:nth-child(1) { width: 15%; min-width: 120px; } /* Rule Name */
+        .mpsp-rules-table th:nth-child(2) { width: 8%; min-width: 80px; } /* Status */
+        .mpsp-rules-table th:nth-child(3) { width: 12%; min-width: 100px; } /* Gateway */
+        .mpsp-rules-table th:nth-child(4) { width: 15%; min-width: 120px; } /* Membership */
+        .mpsp-rules-table th:nth-child(5) { width: 12%; min-width: 100px; } /* Price Filter */
+        .mpsp-rules-table th:nth-child(6) { width: 10%; min-width: 90px; } /* Billing Filter */
+        .mpsp-rules-table th:nth-child(7) { width: 8%; min-width: 70px; } /* New Price */
+        .mpsp-rules-table th:nth-child(8) { width: 8%; min-width: 80px; } /* Created */
+        .mpsp-rules-table th:nth-child(9) { width: 10%; min-width: 90px; } /* Last Processed */
+        .mpsp-rules-table th:nth-child(10) { width: 6%; min-width: 50px; } /* Count */
+        .mpsp-rules-table th:nth-child(11) { width: 16%; min-width: 140px; } /* Actions */
+
+        .mpsp-log-table th:nth-child(1) { width: 15%; min-width: 140px; } /* Date */
+        .mpsp-log-table th:nth-child(2) { width: 12%; min-width: 100px; } /* Subscription ID */
+        .mpsp-log-table th:nth-child(3) { width: 12%; min-width: 90px; } /* Old Price */
+        .mpsp-log-table th:nth-child(4) { width: 12%; min-width: 90px; } /* New Price */
+        .mpsp-log-table th:nth-child(5) { width: 10%; min-width: 80px; } /* Status */
+        .mpsp-log-table th:nth-child(6) { width: 39%; min-width: 200px; } /* Message */
+
+        .mpsp-reports-table th:nth-child(1) { width: 12%; min-width: 100px; } /* Job ID */
+        .mpsp-reports-table th:nth-child(2) { width: 20%; min-width: 150px; } /* Rule Name */
+        .mpsp-reports-table th:nth-child(3) { width: 15%; min-width: 140px; } /* Started */
+        .mpsp-reports-table th:nth-child(4) { width: 15%; min-width: 140px; } /* Completed */
+        .mpsp-reports-table th:nth-child(5) { width: 10%; min-width: 80px; } /* Processed */
+        .mpsp-reports-table th:nth-child(6) { width: 8%; min-width: 60px; } /* Errors */
+        .mpsp-reports-table th:nth-child(7) { width: 20%; min-width: 120px; } /* Actions */
+
+        /* Text Truncation for Long Content */
+        .mpsp-table-container td {
+            word-wrap: break-word;
+            max-width: 250px;
+        }
+
+        .mpsp-truncate {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px;
+        }
+
+        /* Action Buttons */
         .mpsp-rule-actions {
             white-space: nowrap;
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
         }
+
         .mpsp-rule-actions .button {
-            margin-right: 5px;
+            font-size: 11px;
+            height: 26px;
+            line-height: 24px;
+            padding: 0 8px;
+            flex-shrink: 0;
         }
+
+        /* Status Indicators */
+        .mpsp-status-active {
+            color: #46b450;
+            font-weight: 600;
+        }
+
+        .mpsp-status-disabled {
+            color: #dc3232;
+            font-weight: 600;
+        }
+
+        .mpsp-status-success {
+            color: #46b450;
+            font-weight: 600;
+        }
+
+        .mpsp-status-error {
+            color: #dc3232;
+            font-weight: 600;
+        }
+
+        /* Preview Table */
         #subscription_preview table {
             border-collapse: collapse;
             width: 100%;
+            margin-top: 10px;
         }
+
         #subscription_preview th,
         #subscription_preview td {
             border: 1px solid #ddd;
             padding: 8px;
             text-align: left;
         }
+
         #subscription_preview th {
             background-color: #f2f2f2;
+            font-weight: 600;
         }
+
         .mpsp-processing {
             opacity: 0.6;
             pointer-events: none;
+        }
+
+        /* Mobile Responsive Design */
+        @media screen and (max-width: 1024px) {
+            .mpsp-table-container .wp-list-table {
+                min-width: 900px;
+            }
+            
+            .mpsp-rule-actions {
+                flex-direction: column;
+                gap: 3px;
+            }
+            
+            .mpsp-rule-actions .button {
+                width: 100%;
+                text-align: center;
+            }
+        }
+
+        @media screen and (max-width: 768px) {
+            .mpsp-table-container {
+                margin: 10px -20px;
+                border-radius: 0;
+            }
+            
+            .mpsp-table-container .wp-list-table {
+                min-width: 1000px;
+            }
+            
+            .mpsp-table-container th,
+            .mpsp-table-container td {
+                padding: 6px 4px;
+                font-size: 12px;
+            }
+            
+            .mpsp-truncate {
+                max-width: 100px;
+            }
+        }
+
+        /* Table Loading State */
+        .mpsp-table-loading {
+            position: relative;
+        }
+
+        .mpsp-table-loading::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.8);
+            z-index: 10;
+        }
+
+        /* Improved Form Table */
+        .form-table th {
+            width: 200px;
+            font-weight: 600;
+        }
+
+        .form-table td {
+            padding: 15px 10px;
         }
         </style>
         
@@ -1544,72 +1699,74 @@ class MP_Stripe_Price_Updater {
         }
         
         ?>
-        <table class="wp-list-table widefat fixed striped">
-            <thead>
-                <tr>
-                    <th>Rule Name</th>
-                    <th>Status</th>
-                    <th>Gateway</th>
-                    <th>Membership</th>
-                    <th>Price Filter</th>
-                    <th>Billing Filter</th>
-                    <th>New Price</th>
-                    <th>Created</th>
-                    <th>Last Processed</th>
-                    <th>Count</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($rules as $index => $rule): ?>
-                <tr>
-                    <td><?php echo esc_html($rule['name']); ?></td>
-                    <td>
-                        <?php if (empty($rule['enabled'])): ?>
-                            <span style="color: red;">Disabled</span>
-                            <?php if (!empty($rule['auto_disabled_at'])): ?>
-                                <br><small>Auto-disabled: <?php echo esc_html(date('Y-m-d H:i', strtotime($rule['auto_disabled_at']))); ?></small>
+        <div class="mpsp-table-container">
+            <table class="wp-list-table widefat fixed striped mpsp-rules-table">
+                <thead>
+                    <tr>
+                        <th>Rule Name</th>
+                        <th>Status</th>
+                        <th>Gateway</th>
+                        <th>Membership</th>
+                        <th>Price Filter</th>
+                        <th>Billing Filter</th>
+                        <th>New Price</th>
+                        <th>Created</th>
+                        <th>Last Processed</th>
+                        <th>Count</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($rules as $index => $rule): ?>
+                    <tr>
+                        <td><div class="mpsp-truncate" title="<?php echo esc_attr($rule['name']); ?>"><?php echo esc_html($rule['name']); ?></div></td>
+                        <td>
+                            <?php if (empty($rule['enabled'])): ?>
+                                <span class="mpsp-status-disabled">Disabled</span>
+                                <?php if (!empty($rule['auto_disabled_at'])): ?>
+                                    <br><small>Auto-disabled: <?php echo esc_html(date('Y-m-d H:i', strtotime($rule['auto_disabled_at']))); ?></small>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                <span class="mpsp-status-active">Active</span>
                             <?php endif; ?>
-                        <?php else: ?>
-                            <span style="color: green;">Active</span>
-                        <?php endif; ?>
-                    </td>
-                    <td><?php echo esc_html($this->get_gateway_label($rule['gateway_id'])); ?></td>
-                    <td><?php echo esc_html(get_the_title($rule['membership_id'])); ?></td>
-                    <td>
-                        <?php
-                        if ($rule['price_filter_type'] === 'specific') {
-                            echo esc_html(MeprAppHelper::format_currency($rule['specific_price']));
-                        } else {
-                            $min = !empty($rule['min_price']) ? MeprAppHelper::format_currency($rule['min_price']) : 'Any';
-                            $max = !empty($rule['max_price']) ? MeprAppHelper::format_currency($rule['max_price']) : 'Any';
-                            echo esc_html($min . ' - ' . $max);
-                        }
-                        ?>
-                    </td>
-                    <td>
-                        <?php
-                        $period = !empty($rule['billing_period']) ? $rule['billing_period'] : 'Any';
-                        $interval = !empty($rule['billing_interval']) ? $rule['billing_interval'] : 'Any';
-                        echo esc_html($period . ' ' . $interval);
-                        ?>
-                    </td>
-                    <td><?php echo esc_html(MeprAppHelper::format_currency($rule['new_price'])); ?></td>
-                    <td><?php echo esc_html(date('Y-m-d', strtotime($rule['created_at']))); ?></td>
-                    <td><?php echo $rule['last_processed'] ? esc_html(date('Y-m-d H:i', strtotime($rule['last_processed']))) : 'Never'; ?></td>
-                    <td><?php echo intval($rule['processed_count'] ?? 0); ?></td>
-                    <td class="mpsp-rule-actions">
-                        <?php if (!empty($rule['enabled'])): ?>
-                            <button class="button button-small process-rule-now" data-index="<?php echo $index; ?>">Process Now</button>
-                        <?php else: ?>
-                            <button class="button button-small enable-rule" data-index="<?php echo $index; ?>">Enable</button>
-                        <?php endif; ?>
-                        <button class="button button-small delete-rule" data-index="<?php echo $index; ?>">Delete</button>
-                    </td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+                        </td>
+                        <td><div class="mpsp-truncate" title="<?php echo esc_attr($this->get_gateway_label($rule['gateway_id'])); ?>"><?php echo esc_html($this->get_gateway_label($rule['gateway_id'])); ?></div></td>
+                        <td><div class="mpsp-truncate" title="<?php echo esc_attr(get_the_title($rule['membership_id'])); ?>"><?php echo esc_html(get_the_title($rule['membership_id'])); ?></div></td>
+                        <td>
+                            <?php
+                            if ($rule['price_filter_type'] === 'specific') {
+                                echo esc_html(MeprAppHelper::format_currency($rule['specific_price']));
+                            } else {
+                                $min = !empty($rule['min_price']) ? MeprAppHelper::format_currency($rule['min_price']) : 'Any';
+                                $max = !empty($rule['max_price']) ? MeprAppHelper::format_currency($rule['max_price']) : 'Any';
+                                echo esc_html($min . ' - ' . $max);
+                            }
+                            ?>
+                        </td>
+                        <td>
+                            <?php
+                            $period = !empty($rule['billing_period']) ? $rule['billing_period'] : 'Any';
+                            $interval = !empty($rule['billing_interval']) ? $rule['billing_interval'] : 'Any';
+                            echo esc_html($period . ' ' . $interval);
+                            ?>
+                        </td>
+                        <td><?php echo esc_html(MeprAppHelper::format_currency($rule['new_price'])); ?></td>
+                        <td><?php echo esc_html(date('Y-m-d', strtotime($rule['created_at']))); ?></td>
+                        <td><?php echo $rule['last_processed'] ? esc_html(date('Y-m-d H:i', strtotime($rule['last_processed']))) : 'Never'; ?></td>
+                        <td><?php echo intval($rule['processed_count'] ?? 0); ?></td>
+                        <td class="mpsp-rule-actions">
+                            <?php if (!empty($rule['enabled'])): ?>
+                                <button class="button button-small process-rule-now" data-index="<?php echo $index; ?>">Process Now</button>
+                            <?php else: ?>
+                                <button class="button button-small enable-rule" data-index="<?php echo $index; ?>">Enable</button>
+                            <?php endif; ?>
+                            <button class="button button-small delete-rule" data-index="<?php echo $index; ?>">Delete</button>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
         
         <h3 style="margin-top: 30px;">Recent Processing Log</h3>
         <?php $this->display_processing_log(); ?>
@@ -1631,34 +1788,36 @@ class MP_Stripe_Price_Updater {
         $recent_log = array_slice(array_reverse($log), 0, 20);
         
         ?>
-        <table class="wp-list-table widefat fixed striped">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Subscription ID</th>
-                    <th>Old Price</th>
-                    <th>New Price</th>
-                    <th>Status</th>
-                    <th>Message</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($recent_log as $entry): ?>
-                <tr>
-                    <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($entry['updated_at']))); ?></td>
-                    <td><?php echo esc_html($entry['subscription_id']); ?></td>
-                    <td><?php echo esc_html(MeprAppHelper::format_currency($entry['old_price'])); ?></td>
-                    <td><?php echo esc_html(MeprAppHelper::format_currency($entry['new_price'])); ?></td>
-                    <td>
-                        <span style="color: <?php echo $entry['status'] === 'success' ? 'green' : 'red'; ?>;">
-                            <?php echo esc_html(ucfirst($entry['status'])); ?>
-                        </span>
-                    </td>
-                    <td><?php echo esc_html($entry['message']); ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+        <div class="mpsp-table-container">
+            <table class="wp-list-table widefat fixed striped mpsp-log-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Subscription ID</th>
+                        <th>Old Price</th>
+                        <th>New Price</th>
+                        <th>Status</th>
+                        <th>Message</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($recent_log as $entry): ?>
+                    <tr>
+                        <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($entry['updated_at']))); ?></td>
+                        <td><?php echo esc_html($entry['subscription_id']); ?></td>
+                        <td><?php echo esc_html(MeprAppHelper::format_currency($entry['old_price'])); ?></td>
+                        <td><?php echo esc_html(MeprAppHelper::format_currency($entry['new_price'])); ?></td>
+                        <td>
+                            <span class="<?php echo $entry['status'] === 'success' ? 'mpsp-status-success' : 'mpsp-status-error'; ?>">
+                                <?php echo esc_html(ucfirst($entry['status'])); ?>
+                            </span>
+                        </td>
+                        <td><div class="mpsp-truncate" title="<?php echo esc_attr($entry['message']); ?>"><?php echo esc_html($entry['message']); ?></div></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
         <?php
     }
     
@@ -1674,42 +1833,46 @@ class MP_Stripe_Price_Updater {
         $reports_reversed = array_reverse($reports);
         
         ?>
-        <table class="wp-list-table widefat fixed striped">
-            <thead>
-                <tr>
-                    <th>Job ID</th>
-                    <th>Rule Name</th>
-                    <th>Started</th>
-                    <th>Completed</th>
-                    <th>Processed</th>
-                    <th>Errors</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($reports_reversed as $display_index => $report): 
-                    $actual_index = count($reports) - 1 - $display_index; // Calculate original index
-                ?>
-                <tr>
-                    <td><?php echo esc_html(substr($report['job_id'], 0, 8)); ?>...</td>
-                    <td><?php echo esc_html($report['rule_name']); ?></td>
-                    <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($report['started_at']))); ?></td>
-                    <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($report['completed_at']))); ?></td>
-                    <td><?php echo intval($report['processed_count']); ?></td>
-                    <td style="color: <?php echo $report['error_count'] > 0 ? 'red' : 'green'; ?>;">
-                        <?php echo intval($report['error_count']); ?>
-                    </td>
-                    <td>
-                        <button class="button button-small download-csv-report" 
-                                data-index="<?php echo $actual_index; ?>"
-                                data-job-id="<?php echo esc_attr($report['job_id']); ?>">
-                            Download CSV
-                        </button>
-                    </td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+        <div class="mpsp-table-container">
+            <table class="wp-list-table widefat fixed striped mpsp-reports-table">
+                <thead>
+                    <tr>
+                        <th>Job ID</th>
+                        <th>Rule Name</th>
+                        <th>Started</th>
+                        <th>Completed</th>
+                        <th>Processed</th>
+                        <th>Errors</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($reports_reversed as $display_index => $report): 
+                        $actual_index = count($reports) - 1 - $display_index; // Calculate original index
+                    ?>
+                    <tr>
+                        <td><span title="<?php echo esc_attr($report['job_id']); ?>"><?php echo esc_html(substr($report['job_id'], 0, 8)); ?>...</span></td>
+                        <td><div class="mpsp-truncate" title="<?php echo esc_attr($report['rule_name']); ?>"><?php echo esc_html($report['rule_name']); ?></div></td>
+                        <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($report['started_at']))); ?></td>
+                        <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($report['completed_at']))); ?></td>
+                        <td><?php echo intval($report['processed_count']); ?></td>
+                        <td>
+                            <span class="<?php echo $report['error_count'] > 0 ? 'mpsp-status-error' : 'mpsp-status-success'; ?>">
+                                <?php echo intval($report['error_count']); ?>
+                            </span>
+                        </td>
+                        <td>
+                            <button class="button button-small download-csv-report" 
+                                    data-index="<?php echo $actual_index; ?>"
+                                    data-job-id="<?php echo esc_attr($report['job_id']); ?>">
+                                Download CSV
+                            </button>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
         
         <script>
         jQuery(document).ready(function($) {
