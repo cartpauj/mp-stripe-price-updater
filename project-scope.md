@@ -2,641 +2,84 @@
 
 ## Project Overview
 
-This project involved analyzing and completely rewriting a WordPress plugin for automating Stripe subscription price updates within the MemberPress membership plugin ecosystem. The original plugin had significant flaws in its integration with MemberPress and Stripe APIs, requiring a complete architectural overhaul.
+Complete rewrite of a WordPress plugin for automating Stripe subscription price updates within MemberPress. Original plugin had significant flaws requiring complete architectural overhaul from WordPress options storage to proper database tables with job management.
 
-## Initial Assessment
+## Key Problems Solved
 
-### Problems with Original Plugin
-- **Incorrect Gateway Access**: Used wrong data structures to access Stripe gateway configurations
-- **Improper Subscription Querying**: Used incorrect gateway identifiers in database queries
-- **Broken Stripe API Integration**: Hardcoded currency, improper price creation, missing error handling
-- **Poor User Experience**: Minimal interface, no preview functionality, limited filtering options
-- **Incomplete Error Handling**: Basic logging, no detailed error tracking
-- **Security Issues**: Missing nonce verification, inadequate permission checks
+- **Incorrect MemberPress Integration**: Fixed gateway access and subscription querying
+- **Broken Stripe API Integration**: Implemented proper currency handling and error management  
+- **Poor Job Management**: Fixed fundamental flaw where new jobs were created every 5 minutes instead of continuing existing jobs
+- **Data Storage Issues**: Migrated from WordPress options to proper database tables with relationships
+- **Security Vulnerabilities**: Added comprehensive SQL injection prevention and input validation
 
-## Research & Analysis Phase
-
-### MemberPress Architecture Investigation
-1. **Gateway Storage Analysis**
-   - Analyzed `MeprOptions` class and `integrations` property structure
-   - Documented how Stripe gateways are stored in WordPress options
-   - Identified correct gateway ID generation and usage patterns
-   - Mapped relationship between gateway configurations and API keys
-
-2. **Subscription Data Structure**
-   - Examined `MeprSubscription` model and database schema
-   - Analyzed relationship between subscriptions, products, and gateways
-   - Documented proper querying methods for active subscriptions
-   - Identified correct gateway identifier format for database queries
-
-3. **Stripe Integration Patterns**
-   - Reviewed existing MemberPress Stripe gateway implementation
-   - Analyzed API key management (test vs live environments)
-   - Documented proper Stripe subscription update procedures
-   - Identified billing cycle and pricing structure handling
-
-## Complete Plugin Rewrite
-
-### Core Architecture Improvements
-
-#### 1. Proper MemberPress Integration
-- **Gateway Access**: Correctly accesses Stripe gateways from MeprOptions integrations array using proper gateway ID structure
-- **Subscription Queries**: Uses accurate gateway identifiers in database queries to find active subscriptions
-- **Data Mapping**: Properly maps MemberPress subscription objects to Stripe subscription IDs for API calls
-
-#### 2. Enhanced Admin Interface
-- **Progressive Form Design**: Step-by-step interface that reveals options based on selections
-- **Gateway Selection**: Dropdown populated with actual configured Stripe gateways
-- **Membership Filtering**: Only shows memberships with active subscriptions for selected gateway
-- **Advanced Filtering Options**:
-  - Price range or specific price targeting
-  - Billing cycle filtering (period and interval)
-  - Live preview of affected subscriptions
-- **Rule Management**: Named rules with enable/disable functionality
-
-#### 3. Robust Stripe API Integration
-- **WordPress HTTP API Implementation**: Uses wp_remote_* functions for better WordPress integration and hosting compatibility
-- **Dynamic Price Creation**: Creates new price objects in Stripe that maintain existing billing intervals and product associations
-- **Currency Handling**: Dynamically detects and preserves existing subscription currency settings
-- **Comprehensive Error Handling**: All external API calls wrapped in try-catch blocks with detailed error reporting
-- **Intelligent API Key Management**: Automatically selects appropriate API keys (test/live) based on MemberPress gateway configuration and global testing constants
-- **Mode Validation**: Validates API key availability for selected mode before processing to prevent runtime failures
-- **Graceful Degradation**: System continues processing even when individual API calls fail
-- **API Mode Tracking**: Complete audit trail of which Stripe API environment (test/live) was used for each transaction
-
-#### 4. Advanced Subscription Targeting
-- **Multi-Gateway Support**: Handle multiple Stripe gateway configurations
-- **Flexible Price Filtering**: 
-  - Range-based filtering (min/max prices)
-  - Specific price targeting
-  - Price comparison with floating-point precision
-- **Billing Terms Filtering**:
-  - Period filtering (1, 2, 3+ intervals)
-  - Interval type filtering (weeks, months, years)
-  - Optional filtering (any period/interval)
-
-#### 5. Enhanced Processing Engine with Job Management
-- **Single Job Execution**: Ensures only one processing job runs at a time to prevent conflicts
-- **Conservative Processing Strategy**: Maximum 25 subscriptions per 5-minute cycle for optimal server performance
-- **Real-Time Progress Tracking**: Live progress updates with percentage completion and status messages
-- **Background Processing**: Non-blocking job execution with detailed progress monitoring
-- **Job Persistence**: Job status survives page refreshes and browser sessions
-- **Cancellation Support**: Users can cancel running jobs with immediate effect
-- **Silent Database Updates**: Direct database modifications to avoid triggering MemberPress hooks, emails, and webhooks
-- **Historical Data Preservation**: Only updates subscription pricing while preserving all transaction history
-- **Execution Time Limits**: 2-minute maximum execution time per cycle with automatic continuation
-
-#### 6. Comprehensive Error Handling & Admin Notifications
-- **Complete Exception Coverage**: All external API calls, file operations, and data processing wrapped in try-catch blocks
-- **Detailed Error Tracking**: Separate tracking for Stripe API errors, MemberPress database errors, and system exceptions
-- **Processing Statistics**: Track success rates, processing counts, timestamps with detailed CSV reporting
-- **Audit Trail**: Complete log of all price updates with user details, before/after values, and error messages
-- **WordPress Error Integration**: All exceptions logged to WordPress error log for debugging
-- **Admin Email Notifications**: Automatic email reports with CSV attachments to MemberPress admin addresses upon job completion
-- **Downloadable Reports**: Job history display with CSV download functionality in plugin admin interface
-- **User Feedback**: Real-time progress indicators and clear error messages with graceful degradation
-
-## Technical Implementation Details
-
-### Security Enhancements
-- **Nonce Verification**: All AJAX requests use WordPress nonces
-- **Permission Checks**: Verify `manage_options` capability for all admin actions
-- **Data Sanitization**: Proper sanitization of all user inputs
-- **SQL Injection Prevention**: Prepared statements for all database queries
-
-### Performance Optimizations
-- **Efficient Queries**: Optimized database queries with proper indexing
-- **Batch Processing**: Process multiple subscriptions efficiently
-- **Caching**: Leverage WordPress object caching where appropriate
-- **Resource Management**: Proper cURL timeout and connection handling
-
-### Data Integrity
-- **Transaction Safety**: Update Stripe first, then MemberPress to maintain consistency
-- **Direct Database Updates**: Use direct `$wpdb->update()` calls to avoid triggering MemberPress hooks, emails, and webhooks
-- **Historical Preservation**: Only update subscription records, never modify existing transaction history
-- **Rollback Capability**: Log all changes for potential manual rollback
-- **Validation**: Comprehensive data validation before processing
-- **Backup Considerations**: Maintain original price information in logs
-
-## Feature Set Comparison
-
-### Original Plugin Capabilities
-- Basic gateway selection (broken implementation)
-- Simple price range filtering
-- Manual processing only
-- Minimal error logging
-- No preview functionality
-
-### New Plugin Capabilities
-- **Gateway Management**:
-  - Multiple Stripe gateway support
-  - Automatic API key selection (test/live)
-  - Gateway validation and error handling
-
-- **Advanced Filtering**:
-  - Price range or specific price targeting
-  - Billing cycle filtering
-  - Membership-specific targeting
-  - Live preview of affected subscriptions
-
-- **Processing Options**:
-  - Automated 5-minute interval cron processing with conservative batch limits
-  - Manual "Process Now" functionality with job management
-  - Rule-based processing with enable/disable
-  - Single-job execution with real-time progress tracking
-  - Job cancellation and status persistence
-  - Background processing with admin email notifications
-
-- **Management Features**:
-  - Named rules for organization
-  - Processing statistics and history
-  - Comprehensive audit logging
-  - Rule deletion and modification
-
-- **User Experience**:
-  - Progressive form interface with API mode indicators
-  - Real-time job progress tracking with visual indicators
-  - Live subscription preview functionality
-  - Job status persistence across page navigation
-  - Detailed error messages and admin notifications
-  - Interactive job cancellation capabilities
-  - Gateway mode visibility (Test/Live/Global Test) in selection interface
-
-## Technical Architecture
-
-### File Structure
-- **Plugin Architecture**: Single-file WordPress plugin with modular class-based design
-- **Core Components**: Main plugin class implementing singleton pattern for resource management
-- **Interface Layer**: Progressive admin interface with AJAX-powered real-time updates
-- **Integration Layer**: Direct MemberPress and Stripe API integration without external dependencies
-- **Job Management**: Background processing system with progress tracking and status persistence
-- **Communication Layer**: Email notification system integrated with MemberPress admin settings
-
-### Key Architectural Components
-- **MP_Stripe_Price_Updater**: Main plugin class managing lifecycle and dependency injection
-- **Gateway Integration**: MemberPress Stripe gateway discovery and configuration access
-- **Subscription Filtering**: Advanced multi-criteria subscription targeting system
-- **Job Processing Engine**: Background job management with real-time progress tracking
-- **Stripe API Layer**: Direct API communication with comprehensive error handling
-- **Database Operations**: Silent subscription updates via direct database queries
-- **Notification System**: Admin email integration using MemberPress configuration
+## Current Architecture
 
 ### Database Schema
-- **WordPress Options**:
-  - `mpsp_price_update_rules`: Rule configurations with targeting criteria and processing statistics
-  - `mpsp_price_update_log`: Comprehensive processing audit trail with error tracking
-  - `mpsp_current_job`: Real-time job status and progress tracking
-- **MemberPress Tables**:
-  - `wp_mepr_subscriptions`: Direct subscription record updates for future billing
-  - `wp_mepr_transactions`: Historical transaction data (read-only, preserved intact)
-
-## Testing & Validation Strategy
-
-### Recommended Testing Approach
-1. **Gateway Configuration Testing**:
-   - Verify proper detection of configured Stripe gateways
-   - Test with both test and live API keys
-   - Validate API key selection logic
-
-2. **Subscription Filtering Testing**:
-   - Test various price range scenarios
-   - Validate billing cycle filtering
-   - Verify membership-specific filtering
-
-3. **Processing Testing**:
-   - Test with Stripe test environment
-   - Validate error handling with invalid API keys
-   - Test rollback scenarios
-
-4. **Job Management Testing**:
-   - Test single job execution constraints
-   - Validate job cancellation functionality
-   - Verify progress tracking accuracy
-   - Test job status persistence across sessions
-
-5. **Security Testing**:
-   - Verify nonce validation for all AJAX endpoints
-   - Test permission restrictions for job management
-   - Validate input sanitization and SQL injection prevention
-
-## Deployment Considerations
-
-### Requirements
-- **WordPress**: 5.0+
-- **MemberPress**: Active installation with configured Stripe gateways
-- **PHP**: 7.4+ (for proper array syntax support)
-- **cURL**: Required for Stripe API communication
-
-### Installation Steps
-1. Upload plugin file to WordPress plugins directory
-2. Activate plugin through WordPress admin
-3. Navigate to MemberPress → Stripe Price Updater
-4. Configure initial price update rules
-5. Test with small subset of subscriptions
-
-### Production Deployment
-- **Backup Strategy**: Database backup before first production run
-- **Monitoring**: Monitor WordPress cron execution
-- **Error Tracking**: Review processing logs regularly
-- **Gradual Rollout**: Start with limited rules, expand gradually
-
-## Future Enhancement Opportunities
-
-### Potential Improvements
-1. **Advanced Scheduling**: Custom cron schedules beyond hourly processing
-2. **Bulk Operations**: Mass rule creation and management interfaces
-3. **Export Functionality**: CSV/PDF export of processing logs and statistics
-4. **API Integration**: REST API endpoints for external system integrations
-5. **Multi-Currency Support**: Enhanced currency conversion and handling
-6. **Customer Notifications**: Optional customer email notifications for price changes
-7. **Rollback Functionality**: Automated price rollback capabilities with audit trails
-8. **Dashboard Analytics**: Visual reporting and analytics for processing trends
-9. **Webhook Integration**: Real-time webhook notifications for external systems
-10. **Advanced Filtering**: Additional subscription targeting criteria and conditions
-
-### Integration Possibilities
-- **Member Communication**: Integration with MemberPress email system
-- **Analytics**: Integration with WordPress analytics plugins
-- **CRM Integration**: Customer data synchronization
-- **Accounting**: Integration with accounting software APIs
-
-## Conclusion
-
-This project successfully transformed a broken, limited plugin into a comprehensive, enterprise-ready solution for automated Stripe subscription price management within MemberPress. The new implementation provides robust error handling, advanced filtering capabilities, comprehensive logging, and a user-friendly interface while maintaining data integrity and security best practices.
-
-Key technical achievements include:
-- **Job Management System**: Single-job execution with real-time progress tracking and cancellation capabilities
-- **Silent Updates**: Direct database modifications to avoid triggering MemberPress hooks, customer emails, and webhook notifications
-- **Historical Data Preservation**: Updates only subscription pricing for future renewals while preserving all existing transaction history
-- **Admin Notifications**: Automatic email reports to MemberPress administrators upon job completion with CSV attachments
-- **Status Persistence**: Job progress survives page navigation and browser sessions
-- **Clean Integration**: Seamless integration with MemberPress architecture without disrupting existing workflows
-- **Comprehensive Logging**: Enhanced CSV reports with API mode tracking, Stripe price IDs, and subscription-level details
-- **Robust Error Handling**: All external API calls wrapped in try-catch blocks with proper failure reporting
-- **WordPress Standards Compliance**: Uses wp_remote_* functions instead of cURL for better hosting compatibility
-- **Stripe API Mode Management**: Complete test/live mode detection and validation matching MemberPress core logic
-- **Enterprise-Grade Audit Trail**: Full tracking of API modes, price changes, and error categorization for compliance and debugging
-
-## Recent Technical Enhancements
-
-### Comprehensive Logging and Reporting System
-- **Detailed Job Reports**: Each job generates a comprehensive report with individual subscription processing results
-- **Enhanced CSV Export**: Downloadable CSV reports with user details, pricing changes, status, error messages, API mode tracking, and Stripe price IDs
-- **Admin Interface Reports**: Job history display with download capabilities directly from the plugin admin page
-- **Email Report Attachments**: Completion emails include CSV reports as attachments for immediate analysis
-- **Error Categorization**: Detailed tracking of Stripe API failures vs MemberPress database failures vs system exceptions
-- **API Mode Tracking**: Complete audit trail showing whether test or live Stripe API was used for each subscription update
-
-### Enhanced Error Handling and API Integration
-- **Complete Exception Coverage**: All external API calls wrapped in comprehensive try-catch blocks
-- **WordPress HTTP API**: Migrated from cURL to wp_remote_* functions for better WordPress integration and hosting compatibility
-- **Conservative Processing Limits**: Maximum 25 subscriptions per 5-minute cycle to ensure server stability
-- **Graceful Degradation**: System continues processing even when non-critical operations fail (e.g., CSV attachment creation)
-- **Detailed Error Messages**: Specific error reporting for network issues, API failures, file system problems, and data processing errors
-- **Error Logging Integration**: All exceptions logged to WordPress error log for debugging purposes
-
-### File Operation Safety
-- **Protected File Operations**: All file creation, writing, and deletion operations wrapped in error handling
-- **Permission Checking**: Verification of directory writability before attempting file operations
-- **Cleanup Safety**: Secure cleanup of temporary files with error handling to prevent system issues
-- **Fallback Mechanisms**: Email delivery continues even if CSV attachment creation fails
-
-### Database Operation Compliance
-- **WordPress Standards**: Proper use of $wpdb->posts, $wpdb->users (WordPress core tables) and $wpdb->prefix for custom tables
-- **Prepared Statements**: All database queries use proper placeholder preparation to prevent SQL injection
-- **MemberPress Consistency**: Database access patterns consistent with MemberPress core implementation
-- **Transaction Safety**: Direct database updates for subscriptions while preserving transaction history
-
-### Stripe API Mode Management
-- **MemberPress Compatibility**: Follows identical test/live mode detection logic as MemberPress core gateway implementation
-- **Global Testing Support**: Respects MEMBERPRESS_STRIPE_TESTING constant for development environments
-- **Gateway-Specific Mode Detection**: Checks both test_mode and sandbox properties from MemberPress gateway configuration
-- **API Key Validation**: Validates availability of appropriate API keys (test/live) before processing
-- **Mode-Specific Error Handling**: Clear error messages indicating which mode lacks proper configuration
-- **User Interface Indicators**: Gateway dropdown displays current API mode (Test/Live/Global Test) for each configured gateway
-- **Comprehensive Audit Trail**: All CSV reports include API mode information for complete transaction tracking
-- **Development Safety**: Prevents accidental live API usage during testing and development phases
-
-The rewritten plugin demonstrates proper WordPress plugin development practices, secure AJAX handling, professional-grade Stripe API integration using WordPress standards, comprehensive error handling, intelligent test/live mode management, and enterprise-level reporting capabilities with complete audit trails, making it suitable for production use in membership-based businesses of any size while maintaining strict compliance with MemberPress architecture and development workflows.
-
-## Customer Release Preparation Enhancements (January 2025)
-
-Based on developer feedback, the following critical improvements were implemented to prepare the plugin for customer release:
-
-### Multi-Currency Support and Internationalization
-- **Replaced Hardcoded USD Formatting**: All price displays now use `MeprAppHelper::format_currency()` for proper multi-currency support
-- **Dynamic Currency Symbols**: Form inputs display the correct currency symbol from `MeprOptions::fetch()->currency_symbol`
-- **Zero Decimal Currency Handling**: Implements `MeprStripeGateway::is_zero_decimal_currency()` for proper Stripe API amount formatting
-- **Currency-Aware Stripe Integration**: Automatically handles zero decimal currencies (JPY, KRW, etc.) vs regular currencies (USD, EUR, etc.)
-- **Consistent Price Display**: All user-facing price displays respect MemberPress currency formatting preferences
-- **Currency Mismatch Detection**: Early validation prevents Stripe API errors when subscription currency differs from MemberPress configuration
-
-### Stripe Integration Optimization
-- **Plan/Price Reuse**: Integrated `MeprStripeGateway::get_stripe_plan_id()` to reuse existing Stripe price/plan IDs instead of creating duplicates
-- **Reduced API Calls**: Significant reduction in Stripe API usage by leveraging MemberPress's plan caching system
-- **Better Performance**: Plan reuse reduces database growth and improves processing speed
-- **Cost Efficiency**: Fewer Stripe API calls reduce operational costs for high-volume sites
-
-### MemberPress API Integration
-- **Native Stripe Requests**: Replaced custom `stripe_api_request()` with `MeprStripeGateway::send_stripe_request()`
-- **Automatic API Key Management**: MemberPress gateway handles test/live API key selection automatically
-- **Improved Error Handling**: Benefits from MemberPress's proven Stripe error handling patterns
-- **Better Compatibility**: Ensures compatibility with MemberPress updates and Stripe API changes
-- **Reduced Code Maintenance**: Leverages MemberPress's maintained Stripe integration code
-
-### Proper Test Mode Detection
-- **Fixed Global Testing Constant**: Properly implements `MEMBERPRESS_STRIPE_TESTING` constant override
-- **Gateway-Specific Test Mode**: Correctly uses `MeprStripeGateway::is_test_mode()` for each gateway instance
-- **Admin Interface Accuracy**: Gateway dropdown shows accurate test/live mode indicators
-- **Consistent Detection**: Same test mode detection logic used throughout processing and logging
-- **Development Environment Support**: Proper support for development/staging environments
-
-### Intelligent Job Processing
-- **Empty Job Prevention**: No jobs are created when no subscriptions match criteria, preventing unnecessary notifications
-- **Silent Processing**: When no work is needed, the system operates silently without emails or log entries
-- **Reduced Noise**: Eliminates the issue of receiving empty job completion emails every 5 minutes
-- **Improved User Experience**: Users only receive notifications when actual work is performed
-- **Server Resource Optimization**: Avoids unnecessary processing cycles when no subscriptions need updates
-
-### Enhanced Log Management System
-- **Intelligent Cleanup Strategy**: Price update log entries are cleaned up when their corresponding job reports are removed
-- **No Artificial Limits**: Logs grow naturally based on actual usage rather than arbitrary entry limits
-- **Coordinated Data Management**: Related data (job reports and price logs) are cleaned up together
-- **Complete Audit Trail**: Full subscription update history maintained until job reports are cleaned up
-- **Storage Optimization**: Systematic cleanup prevents unlimited database growth while preserving data integrity
-- **Referential Integrity**: Maintains correlation between detailed logs and job reports
-
-### Production Readiness Improvements
-- **Multi-Currency Compliance**: Works correctly with any currency supported by MemberPress and Stripe
-- **API Efficiency**: Reduced Stripe API usage through plan reuse and proper MemberPress integration
-- **Error Reduction**: Improved error handling through native MemberPress Stripe integration
-- **User Experience**: Cleaner notification system that only alerts when necessary
-- **Database Health**: Intelligent log cleanup prevents database bloat while preserving audit trails
-- **Enterprise Scalability**: Optimized for high-volume membership sites with multiple currencies and gateways
-
-### Technical Architecture Refinements
-- **MemberPress-First Approach**: Leverages MemberPress core functionality wherever possible instead of custom implementations
-- **Future-Proof Design**: Integration patterns that will remain compatible with MemberPress updates
-- **Reduced Maintenance Overhead**: Less custom code means fewer potential issues and easier maintenance
-- **Better Testing Capabilities**: Proper test mode detection enables reliable development and staging workflows
-- **Performance Optimization**: More efficient processing through native MemberPress methods and reduced API calls
-
-These enhancements transform the plugin from a functional proof-of-concept into a production-ready, enterprise-grade solution that seamlessly integrates with MemberPress architecture while providing superior performance, reliability, and user experience for customers operating membership sites globally.
-
-## Post-Release Currency Validation Enhancement
-
-During QA/development testing, a currency mismatch error was identified and resolved with an additional enhancement:
-
-### Currency Compatibility Validation
-- **Early Detection**: Validates currency compatibility before attempting Stripe API calls
-- **Prevents API Errors**: Eliminates "The price specified supports currencies of `usd` which doesn't include the expected currency of `dkk`" errors
-- **Clear Error Messages**: Provides descriptive feedback about currency mismatches (e.g., "Currency mismatch: Stripe subscription uses DKK but MemberPress is configured for USD")
-- **API Efficiency**: Saves unnecessary Stripe API calls by detecting issues early
-- **Improved Logging**: Currency mismatch errors are properly categorized in job reports and logs
-- **Configuration Guidance**: Helps administrators identify and resolve currency configuration issues
-
-### Technical Implementation
-- **Location**: Added to `update_stripe_subscription()` method after retrieving Stripe subscription data
-- **Validation Logic**: Compares `$stripe_sub['currency']` with `$options->currency_code` from MemberPress configuration
-- **Case Normalization**: Uses `strtoupper()` for reliable currency code comparison
-- **Early Exit Strategy**: Returns descriptive error before attempting price creation or subscription updates
-- **Integration**: Works seamlessly with existing error handling and reporting systems
-
-This enhancement addresses scenarios where existing Stripe subscriptions may have different currencies than the current MemberPress configuration, providing better error handling and preventing failed API requests that would otherwise result in cryptic Stripe error messages.
-
-## Post-Deployment Critical Bug Fix (June 2025)
-
-During production deployment, a critical issue was identified where the plugin was repeatedly processing the same subscriptions even after successful completion. This resulted in unnecessary API calls, server load, and spam notifications.
-
-### Root Cause Analysis
-The issue manifested as subscription ID 544 being processed repeatedly with identical prices ($99.00 → $99.00), indicating the plugin was:
-1. Finding subscriptions that already matched the target price
-2. Running jobs continuously even when no work needed to be done
-3. Not properly completing rules when their work was finished
-
-### Comprehensive Job Management Fix
-
-#### 1. **Intelligent Subscription Filtering**
-- **Target Price Exclusion**: Modified `get_matching_subscriptions()` to skip subscriptions that already have the target new price
-- **Precision Comparison**: Uses floating-point tolerance (0.01) for accurate price matching
-- **Early Filtering**: Prevents unnecessary processing at the query level
-- **Performance Impact**: Reduces database load and Stripe API calls significantly
-
-#### 2. **Smart Cron Job Logic**
-- **Pre-Job Validation**: Cron jobs now check for actual work before starting processing
-- **Efficient Rule Processing**: Only processes rules that have matching subscriptions requiring updates
-- **Resource Conservation**: Eliminates empty job runs that occurred every 5 minutes
-- **Scalability Improvement**: Reduces server load for sites with completed rules
-
-#### 3. **Automatic Rule Completion System**
-- **Self-Completing Rules**: Rules automatically disable when they have no more work to do
-- **Completion Detection**: Identifies rules that have processed subscriptions but now have zero matches
-- **Auto-Disable Logic**: Prevents indefinite re-running of completed price update campaigns
-- **Audit Trail**: Timestamps when rules are auto-disabled for administrative visibility
-
-#### 4. **Enhanced Administrative Interface**
-- **Rule Status Display**: Added visual status indicators (Active/Disabled) in the rules table
-- **Auto-Disable Notifications**: Shows when and why rules were automatically disabled
-- **Manual Control**: Added "Enable" button for reactivating disabled rules
-- **Smart Actions**: Different action buttons based on rule status (Process Now vs Enable)
-- **Status Column**: New dedicated column showing rule state and auto-disable timestamps
-
-#### 5. **Performance Optimizations**
-- **Query Efficiency**: Avoids duplicate database queries by passing pre-fetched data
-- **Resource Management**: Eliminates redundant Stripe API calls for already-processed subscriptions
-- **Memory Usage**: More efficient data handling in job processing loops
-- **Execution Time**: Faster rule evaluation and job startup
-
-### Technical Implementation Details
-
-#### Core Logic Changes
-```php
-// In get_matching_subscriptions()
-if (isset($criteria['new_price']) && abs($subscription->price - floatval($criteria['new_price'])) < 0.01) {
-    continue; // Skip subscriptions already at target price
-}
-
-// In process_price_updates() cron
-$matching_subscriptions = $this->get_matching_subscriptions($rule);
-if (count($matching_subscriptions) > 0) {
-    $this->start_background_job($rule, $index, $matching_subscriptions);
-    break; // Only process rules with actual work
-}
-```
-
-#### Auto-Disable Logic
-```php
-// Auto-disable completed rules
-if (!empty($rule['processed_count']) && $rule['processed_count'] > 0) {
-    $rules[$index]['enabled'] = false;
-    $rules[$index]['auto_disabled_at'] = current_time('mysql');
-}
-```
-
-#### Administrative Controls
-- **Enable Rule AJAX Handler**: `ajax_enable_rule()` method for reactivating disabled rules
-- **Status Visualization**: Color-coded status indicators (green=active, red=disabled)
-- **Timestamp Display**: Auto-disable dates shown in human-readable format
-- **Action Context**: Process Now button only shows for active rules
-
-### Business Impact Improvements
-- **Cost Reduction**: Eliminates unnecessary Stripe API calls that were being charged
-- **Server Performance**: Reduces CPU and memory usage from redundant processing
-- **User Experience**: Eliminates spam email notifications for no-op operations
-- **Administrative Clarity**: Clear visibility into which rules are active vs completed
-- **Operational Efficiency**: Automatic cleanup of completed campaigns without manual intervention
-
-### Production Deployment Safety
-- **Backward Compatibility**: All existing rules continue to work without modification
-- **Graceful Degradation**: System handles edge cases and maintains stability
-- **Comprehensive Error Handling**: All new logic wrapped in proper exception handling
-- **Audit Trail Preservation**: Complete logging of all rule state changes and processing decisions
-
-### Quality Assurance Validation
-- **Zero False Positives**: Confirmed that legitimate price updates still process correctly
-- **Completion Accuracy**: Verified that rules properly auto-disable only when work is truly complete
-- **Re-enablement Testing**: Confirmed that manually re-enabled rules function correctly
-- **Performance Metrics**: Documented reduction in unnecessary API calls and server load
-
-This critical fix transforms the plugin from a functional but inefficient system into a truly production-ready, self-managing solution that properly handles rule lifecycle management and resource conservation. The improvements ensure that price update campaigns complete cleanly without ongoing maintenance overhead or unnecessary resource consumption.
-
-## Automated Release Pipeline Implementation (June 2025)
-
-Following the critical bug fixes, a comprehensive automated release pipeline was implemented to streamline plugin development, versioning, and distribution workflows.
-
-### GitHub Actions Workflow Architecture
-
-#### 1. **Automated Version Management**
-- **Semantic Versioning**: Implements automatic patch version increments (1.0.5 → 1.0.6 → 1.0.7)
-- **Dual Version Updates**: Synchronizes both plugin header version and MPSP_VERSION constant
-- **Version Extraction**: Dynamically reads current version from plugin file using regex patterns
-- **Mathematical Increment**: Parses major.minor.patch and increments patch number automatically
-
-#### 2. **Intelligent Trigger System**
-- **Path-Based Triggers**: Only activates when `mp-stripe-price-updater.php` is modified
-- **Manual Override**: Supports `workflow_dispatch` for manual release triggering
-- **CI Skip Protection**: Prevents infinite loops using `[ci skip]` flags in commit messages
-- **Branch Targeting**: Exclusively monitors main branch for production releases
-
-#### 3. **Automated File Updates**
-- **Plugin Header Synchronization**: Updates `* Version: X.X.X` comment in plugin file
-- **Constant Synchronization**: Updates `define('MPSP_VERSION', 'X.X.X')` programmatically
-- **Sed-Based Processing**: Uses reliable regex substitution for precise version replacement
-- **Change Verification**: Validates updates with grep confirmation checks
-
-#### 4. **Release Package Generation**
-- **WordPress-Ready Structure**: Creates `mp-stripe-price-updater/` folder containing plugin files
-- **Dual File Inclusion**: Packages both `mp-stripe-price-updater.php` and `LICENSE` files
-- **Version-Named Archives**: Generates `mp-stripe-price-updater-vX.X.X.zip` format
-- **Installation-Ready**: Direct WordPress plugin upload compatibility
-
-#### 5. **Repository Integration**
-- **Atomic Commits**: Single commit containing both version bump and release zip
-- **Descriptive Messages**: Clear commit messages showing version progression
-- **Branch Protection**: Uses `[ci skip]` to prevent workflow recursion
-- **Git Automation**: Configures proper git identity for automated commits
-
-#### 6. **GitHub Release Management**
-- **Tagged Releases**: Creates git tags following `vX.X.X` convention
-- **Release Documentation**: Auto-generates installation instructions and requirements
-- **Asset Attachment**: Uploads zip file as downloadable release asset
-- **Metadata Inclusion**: Records commit SHA and generation timestamp
-
-### Technical Implementation Details
-
-#### Version Bump Logic
-```bash
-# Extract current version components
-MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
-MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
-PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
-
-# Increment patch version
-NEW_PATCH=$((PATCH + 1))
-NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
-```
-
-#### File Update Process
-```bash
-# Update plugin header version
-sed -i "s/^\(\s*\*\s*Version:\s*\)$CURRENT_VERSION\(.*\)$/\1$NEW_VERSION\2/" mp-stripe-price-updater.php
-
-# Update VERSION constant
-sed -i "s/define('MPSP_VERSION', '$CURRENT_VERSION')/define('MPSP_VERSION', '$NEW_VERSION')/" mp-stripe-price-updater.php
-```
-
-#### Release Archive Structure
-```
-mp-stripe-price-updater-v1.0.6.zip
-├── mp-stripe-price-updater/
-│   ├── mp-stripe-price-updater.php
-│   └── LICENSE
-```
-
-### Workflow Permissions and Security
-
-#### GitHub Token Configuration
-- **Contents Write**: Enables repository file modifications and commits
-- **Persist Credentials**: Maintains authentication for git operations
-- **Checkout Depth**: Full history access for proper versioning context
-- **Branch Protection Bypass**: Automated commits respect protection rules
-
-#### Security Measures
-- **Token Scope Limitation**: Minimal required permissions for workflow execution
-- **CI Skip Implementation**: Prevents infinite workflow triggering loops
-- **Path Filtering**: Restricts execution to actual plugin file changes
-- **Manual Override**: Allows controlled manual execution when needed
-
-### Development Workflow Integration
-
-#### Continuous Release Process
-1. **Developer commits** changes to `mp-stripe-price-updater.php`
-2. **Workflow triggers** automatically on main branch push
-3. **Version increments** automatically (patch level)
-4. **Plugin file updates** with new version numbers
-5. **Release zip generates** with updated files
-6. **Repository commits** both updated plugin and zip file
-7. **GitHub release creates** with versioned tag and downloadable asset
-
-#### Quality Assurance Benefits
-- **Consistent Versioning**: Eliminates manual version management errors
-- **Immediate Distribution**: Release packages available immediately after development
-- **Audit Trail**: Complete history of all version changes and releases
-- **Developer Efficiency**: Removes manual packaging and release overhead
-
-### Production Deployment Impact
-
-#### Plugin Distribution
-- **WordPress Compatibility**: Direct upload capability through WordPress admin
-- **Version Clarity**: Clear version progression visible in release history
-- **Download Accessibility**: GitHub Releases page provides easy access
-- **Installation Documentation**: Auto-generated setup instructions
-
-#### Maintenance Reduction
-- **Zero Manual Packaging**: Eliminates need for manual zip creation
-- **Automatic Documentation**: Release notes generate automatically
-- **Version Synchronization**: Prevents version mismatch issues
-- **Release Consistency**: Standardized release format and structure
-
-#### Scalability Advantages
-- **Frequent Releases**: Supports rapid iteration and deployment cycles
-- **Branch Strategy**: Compatible with feature branch workflows
-- **Rollback Capability**: Tagged releases enable easy rollback identification
-- **Distribution Automation**: Enables automatic deployment pipeline extensions
-
-### Future Enhancement Opportunities
-
-#### Advanced Workflow Features
-- **Semantic Version Control**: Major/minor version bump triggers based on commit messages
-- **Release Notes Generation**: Automatic changelog creation from commit history
-- **Multi-Environment Support**: Separate staging and production release tracks
-- **Integration Testing**: Automated plugin validation before release
-- **Distribution Expansion**: WordPress.org plugin directory automation
-
-#### Quality Assurance Integration
-- **Automated Testing**: Plugin functionality verification before release
-- **Code Quality Checks**: Linting and standards validation
-- **Security Scanning**: Vulnerability assessment in release pipeline
-- **Performance Monitoring**: Release impact tracking and metrics
-
-This automated release pipeline transforms plugin development from a manual, error-prone process into a streamlined, professional development workflow that ensures consistent, reliable releases while maintaining complete version control and distribution automation.
+- **Three-Table Design**: `mpsp_rules`, `mpsp_jobs`, `mpsp_entries` with proper relationships
+- **Automatic Migration**: Seamless upgrade from legacy options-based installations
+- **Manual Cascade Deletion**: Maintains data integrity across related tables
+
+### Job Management System
+- **Single-Job Execution**: Only one job runs at a time, enforced by database flags
+- **Intelligent Continuation**: Jobs persist across cron cycles until completion (fixed critical flaw)
+- **Conservative Processing**: 25 subscriptions per 5-minute cycle for server stability
+- **Real-Time Progress**: Live updates with cancellation support
+
+### Key Features
+- **Multi-Gateway Support**: Handle multiple Stripe gateways with automatic API key selection
+- **Advanced Filtering**: Price ranges, billing cycles, membership targeting with live preview
+- **Professional Reporting**: CSV exports with user details, price changes, API mode tracking
+- **Auto-Disable Rules**: Rules automatically disable when processing is complete
+- **Email Notifications**: Automatic reports to MemberPress administrators
+
+## Critical Technical Fixes
+
+### Job Lifecycle Fix
+**Previous (Incorrect)**:
+- Cron Cycle 1: Create Job #1, process 25 subscriptions
+- Cron Cycle 2: Create Job #2, process 25 more ❌
+
+**Current (Correct)**:
+- Cron Cycle 1: Create Job #1, process 25 subscriptions (status: running)  
+- Cron Cycle 2: Continue Job #1, process 25 more (status: running)
+- Cron Cycle 3: Continue Job #1, complete (status: completed)
+
+### Security Hardening
+- **SQL Injection Prevention**: All queries use prepared statements
+- **Input Validation**: Comprehensive sanitization of user inputs
+- **Permission Checks**: Verify `manage_options` capability for all actions
+
+### MemberPress Integration
+- **Native Stripe Requests**: Uses `MeprStripeGateway::send_stripe_request()`
+- **Currency Compatibility**: Handles multi-currency with zero decimal support
+- **Plan Reuse**: Leverages `MeprStripeGateway::get_stripe_plan_id()` to reduce API calls
+- **Test Mode Detection**: Proper `MEMBERPRESS_STRIPE_TESTING` constant support
+
+## Technical Status
+
+**Current Plugin**: 2,774-line enterprise-grade WordPress plugin with:
+- Responsive admin interface with real-time job monitoring
+- Comprehensive error handling and logging
+- Multi-currency support with proper formatting
+- Automated cleanup and maintenance
+- GitHub Actions CI/CD pipeline for releases
+
+## File Structure
+- **Main Plugin**: `/mp-stripe-price-updater.php` (single file, 2,774 lines)
+- **Database Tables**: Rules → Jobs → Entries relationship
+- **AJAX Handlers**: Real-time status updates and job management
+- **Cron Integration**: 5-minute intervals with intelligent job continuation
+
+## Development Standards
+- WordPress coding standards compliance
+- Singleton pattern implementation
+- Comprehensive exception coverage
+- Performance optimization with strategic indexing
+- Future-proof integration patterns with MemberPress
+
+## Key Learnings for Future Sessions
+1. **Job Management**: Each rule represents one complete processing campaign, not multiple jobs
+2. **Database Migration**: All operational data moved from `wp_options` to custom tables
+3. **Critical Bug**: Fixed infinite job creation every 5 minutes vs proper job continuation
+4. **Security**: All database operations use prepared statements
+5. **Integration**: Leverage MemberPress native methods instead of custom implementations

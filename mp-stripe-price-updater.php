@@ -35,6 +35,10 @@ class MP_Stripe_Price_Updater {
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('admin_enqueue_scripts', array($this, 'admin_scripts'));
         
+        // Create database tables on activation and check version
+        register_activation_hook(__FILE__, array($this, 'create_database_tables'));
+        add_action('admin_init', array($this, 'check_database_version'));
+        
         // AJAX handlers
         add_action('wp_ajax_mpsp_get_memberships', array($this, 'ajax_get_memberships'));
         add_action('wp_ajax_mpsp_preview_subscriptions', array($this, 'ajax_preview_subscriptions'));
@@ -45,20 +49,18 @@ class MP_Stripe_Price_Updater {
         add_action('wp_ajax_mpsp_get_job_status', array($this, 'ajax_get_job_status'));
         add_action('wp_ajax_mpsp_cancel_job', array($this, 'ajax_cancel_job'));
         add_action('wp_ajax_mpsp_download_csv_report', array($this, 'ajax_download_csv_report'));
+        add_action('wp_ajax_mpsp_get_job_log', array($this, 'ajax_get_job_log'));
+        add_action('wp_ajax_mpsp_get_job_entries', array($this, 'ajax_get_job_entries'));
+        add_action('wp_ajax_mpsp_delete_job', array($this, 'ajax_delete_job'));
+        add_action('wp_ajax_mpsp_purge_all_data', array($this, 'ajax_purge_all_data'));
         
         // Cron setup
         add_action('mpsp_process_price_updates', array($this, 'process_price_updates'));
-        add_action('mpsp_cleanup_logs', array($this, 'cleanup_logs'));
         add_filter('cron_schedules', array($this, 'add_cron_intervals'));
         
         // Schedule cron if not already scheduled
         if (!wp_next_scheduled('mpsp_process_price_updates')) {
             wp_schedule_event(time(), 'every_5_minutes', 'mpsp_process_price_updates');
-        }
-        
-        // Schedule daily log cleanup
-        if (!wp_next_scheduled('mpsp_cleanup_logs')) {
-            wp_schedule_event(time(), 'daily', 'mpsp_cleanup_logs');
         }
         
         register_deactivation_hook(__FILE__, array($this, 'deactivate'));
@@ -89,6 +91,14 @@ class MP_Stripe_Price_Updater {
             'mp-stripe-price-updater',
             array($this, 'admin_page')
         );
+    }
+    
+    public function check_database_version() {
+        $current_db_version = get_option('mpsp_db_version', '1.0.0');
+        
+        if (version_compare($current_db_version, MPSP_VERSION, '<')) {
+            $this->create_database_tables();
+        }
     }
     
     public function admin_scripts($hook) {
@@ -287,7 +297,7 @@ class MP_Stripe_Price_Updater {
             </div>
 
             <div id="mpsp-rules-section">
-                <h2>Active Price Update Rules</h2>
+                <h2>Price Update Rules</h2>
                 <div class="notice notice-info inline" style="margin: 15px 0; padding: 10px;">
                     <p><strong>Processing Information:</strong> For server safety, the system processes up to 25 subscriptions every 5 minutes per rule. Large batches will be processed automatically over multiple cycles.</p>
                 </div>
@@ -528,24 +538,39 @@ class MP_Stripe_Price_Updater {
                 saveUpdateRule();
             });
             
-            // Process rule now buttons
-            $(document).on('click', '.process-rule-now', function() {
-                var ruleIndex = $(this).data('index');
-                processRuleNow(ruleIndex);
-            });
-            
             // Delete rule buttons
             $(document).on('click', '.delete-rule', function() {
-                if (confirm('Are you sure you want to delete this rule?')) {
-                    var ruleIndex = $(this).data('index');
-                    deleteRule(ruleIndex);
-                }
+                var ruleId = $(this).data('rule-id');
+                deleteRule(ruleId);
             });
             
             // Enable rule buttons
             $(document).on('click', '.enable-rule', function() {
-                var ruleIndex = $(this).data('index');
-                enableRule(ruleIndex);
+                var ruleId = $(this).data('rule-id');
+                enableRule(ruleId);
+            });
+            
+            // Process rule now buttons
+            $(document).on('click', '.process-rule-now', function() {
+                var ruleId = $(this).data('rule-id');
+                processRuleNow(ruleId);
+            });
+            
+            // Delete job buttons
+            $(document).on('click', '.delete-job', function() {
+                var jobId = $(this).data('job-id');
+                deleteJob(jobId);
+            });
+            
+            // View job entries buttons
+            $(document).on('click', '.view-job-entries', function() {
+                var jobId = $(this).data('job-id');
+                showJobEntriesModal(jobId);
+            });
+            
+            // Purge all data button
+            $(document).on('click', '#purge-all-data', function() {
+                purgeAllData();
             });
             
             // Cancel job button
@@ -619,7 +644,7 @@ class MP_Stripe_Price_Updater {
                 });
             }
             
-            function processRuleNow(ruleIndex) {
+            function processRuleNow(ruleId) {
                 if (!confirm('Process this rule now? This will immediately update all matching subscriptions.')) {
                     return;
                 }
@@ -631,12 +656,12 @@ class MP_Stripe_Price_Updater {
                         return;
                     }
                     
-                    var button = $('.process-rule-now[data-index="' + ruleIndex + '"]');
+                    var button = $('.process-rule-now[data-rule-id="' + ruleId + '"]');
                     button.addClass('mpsp-processing').text('Starting...');
                     
                     $.post(mpsp_ajax.ajax_url, {
                         action: 'mpsp_process_rule_now',
-                        rule_index: ruleIndex,
+                        rule_id: ruleId,
                         nonce: mpsp_ajax.nonce
                     }, function(response) {
                         button.removeClass('mpsp-processing').text('Process Now');
@@ -651,13 +676,18 @@ class MP_Stripe_Price_Updater {
                 });
             }
             
-            function deleteRule(ruleIndex) {
+            function deleteRule(ruleId) {
+                if (!confirm('Are you sure you want to delete this rule? This will also delete all associated jobs and entries.')) {
+                    return;
+                }
+                
                 $.post(mpsp_ajax.ajax_url, {
                     action: 'mpsp_delete_rule',
-                    rule_index: ruleIndex,
+                    rule_id: ruleId,
                     nonce: mpsp_ajax.nonce
                 }, function(response) {
                     if (response.success) {
+                        alert('Rule deleted successfully.');
                         location.reload();
                     } else {
                         alert('Error deleting rule: ' + response.data);
@@ -665,19 +695,130 @@ class MP_Stripe_Price_Updater {
                 });
             }
             
-            function enableRule(ruleIndex) {
+            function enableRule(ruleId) {
                 $.post(mpsp_ajax.ajax_url, {
                     action: 'mpsp_enable_rule',
-                    rule_index: ruleIndex,
+                    rule_id: ruleId,
                     nonce: mpsp_ajax.nonce
                 }, function(response) {
                     if (response.success) {
-                        location.reload();
+                        // Show job status bar immediately
+                        $('#mpsp-job-status').show();
+                        $('#job-message').text('Rule enabled - starting processing...');
+                        $('#job-progress-bar').css('width', '0%');
+                        $('#job-details').text('Initializing job...');
+                        
+                        // Start processing immediately instead of waiting for cron
+                        processRuleNow(ruleId);
                     } else {
                         alert('Error enabling rule: ' + response.data);
                     }
                 });
             }
+            
+            function deleteJob(jobId) {
+                if (!confirm('Are you sure you want to delete this job? This will delete all associated log entries.')) {
+                    return;
+                }
+                
+                $.post(mpsp_ajax.ajax_url, {
+                    action: 'mpsp_delete_job',
+                    job_id: jobId,
+                    nonce: mpsp_ajax.nonce
+                }, function(response) {
+                    if (response.success) {
+                        alert(response.data.message);
+                        location.reload();
+                    } else {
+                        alert('Error deleting job: ' + response.data);
+                    }
+                });
+            }
+            
+            function showJobEntriesModal(jobId) {
+                $.post(mpsp_ajax.ajax_url, {
+                    action: 'mpsp_get_job_entries',
+                    job_id: jobId,
+                    nonce: mpsp_ajax.nonce
+                }, function(response) {
+                    if (response.success) {
+                        var entries = response.data;
+                        var modalHtml = '<div id="job-entries-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100000; display: flex; align-items: center; justify-content: center;">' +
+                            '<div style="background: white; padding: 20px; border-radius: 5px; max-width: 95%; max-height: 90%; overflow: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">' +
+                            '<h3>Job Entries - Job ID: ' + jobId + '</h3>' +
+                            '<div class="mpsp-table-container" style="max-height: 70vh; overflow-y: auto;">' +
+                            '<table class="wp-list-table widefat fixed striped mpsp-log-table">' +
+                            '<thead><tr><th>Date</th><th>Subscription ID</th><th>User</th><th>Old Price</th><th>New Price</th><th>Status</th><th>API Mode</th><th>Message</th></tr></thead>' +
+                            '<tbody>';
+                        
+                        if (entries.length === 0) {
+                            modalHtml += '<tr><td colspan="8" style="text-align: center; padding: 20px;">No entries found for this job.</td></tr>';
+                        } else {
+                            entries.forEach(function(entry) {
+                                var statusClass = entry.status === 'success' ? 'mpsp-status-success' : 'mpsp-status-error';
+                                modalHtml += '<tr>' +
+                                    '<td>' + entry.processed_at + '</td>' +
+                                    '<td>' + entry.subscription_id + '</td>' +
+                                    '<td>' + entry.user_display_name + '</td>' +
+                                    '<td>' + entry.old_price + '</td>' +
+                                    '<td>' + entry.new_price + '</td>' +
+                                    '<td><span class="' + statusClass + '">' + entry.status.charAt(0).toUpperCase() + entry.status.slice(1) + '</span></td>' +
+                                    '<td>' + entry.api_mode.toUpperCase() + '</td>' +
+                                    '<td><div class="mpsp-truncate" title="' + (entry.error_message || 'Success') + '">' + (entry.error_message || 'Success') + '</div></td>' +
+                                    '</tr>';
+                            });
+                        }
+                        
+                        modalHtml += '</tbody></table></div>' +
+                            '<div style="margin-top: 20px; text-align: right;">' +
+                            '<button type="button" onclick="closeJobEntriesModal()" class="button button-primary">Close</button>' +
+                            '</div></div></div>';
+                        
+                        $('body').append(modalHtml);
+                    } else {
+                        alert('Error loading job entries: ' + response.data);
+                    }
+                });
+            }
+            
+            function closeJobEntriesModal() {
+                $('#job-entries-modal').remove();
+            }
+            
+            function purgeAllData() {
+                if (!confirm('WARNING: This will delete ALL rules, jobs, and entries permanently. This action cannot be undone!\n\nAre you sure you want to proceed?')) {
+                    return;
+                }
+                
+                if (!confirm('FINAL WARNING: You are about to permanently delete all data. Type YES in the next prompt to confirm.')) {
+                    return;
+                }
+                
+                var confirmation = prompt('Type "DELETE ALL DATA" to confirm (case sensitive):');
+                if (confirmation !== 'DELETE ALL DATA') {
+                    alert('Confirmation text did not match. Data purge cancelled.');
+                    return;
+                }
+                
+                $.post(mpsp_ajax.ajax_url, {
+                    action: 'mpsp_purge_all_data',
+                    nonce: mpsp_ajax.nonce
+                }, function(response) {
+                    if (response.success) {
+                        alert(response.data.message);
+                        location.reload();
+                    } else {
+                        alert('Error purging data: ' + response.data);
+                    }
+                });
+            }
+            
+            // Close modal when clicking outside
+            $(document).on('click', '#job-entries-modal', function(e) {
+                if (e.target === this) {
+                    closeJobEntriesModal();
+                }
+            });
             
             function getFormData() {
                 return {
@@ -892,27 +1033,31 @@ class MP_Stripe_Price_Updater {
             wp_send_json_error('Missing required fields');
         }
         
-        $rule = array(
-            'id' => uniqid(),
-            'name' => sanitize_text_field($rule_data['rule_name']),
-            'gateway_id' => sanitize_text_field($rule_data['gateway_id']),
-            'membership_id' => intval($rule_data['membership_id']),
-            'price_filter_type' => sanitize_text_field($rule_data['price_filter_type']),
-            'min_price' => !empty($rule_data['min_price']) ? floatval($rule_data['min_price']) : null,
-            'max_price' => !empty($rule_data['max_price']) ? floatval($rule_data['max_price']) : null,
-            'specific_price' => !empty($rule_data['specific_price']) ? floatval($rule_data['specific_price']) : null,
-            'billing_period' => !empty($rule_data['billing_period']) ? intval($rule_data['billing_period']) : null,
-            'billing_interval' => !empty($rule_data['billing_interval']) ? sanitize_text_field($rule_data['billing_interval']) : null,
-            'new_price' => floatval($rule_data['new_price']),
-            'created_at' => current_time('mysql'),
-            'last_processed' => null,
-            'processed_count' => 0,
-            'enabled' => true
+        global $wpdb;
+        
+        $result = $wpdb->insert(
+            $wpdb->prefix . 'mpsp_rules',
+            array(
+                'name' => sanitize_text_field($rule_data['rule_name']),
+                'gateway_id' => sanitize_text_field($rule_data['gateway_id']),
+                'membership_id' => intval($rule_data['membership_id']),
+                'price_filter_type' => sanitize_text_field($rule_data['price_filter_type']),
+                'min_price' => !empty($rule_data['min_price']) ? floatval($rule_data['min_price']) : null,
+                'max_price' => !empty($rule_data['max_price']) ? floatval($rule_data['max_price']) : null,
+                'specific_price' => !empty($rule_data['specific_price']) ? floatval($rule_data['specific_price']) : null,
+                'billing_period' => !empty($rule_data['billing_period']) ? intval($rule_data['billing_period']) : null,
+                'billing_interval' => !empty($rule_data['billing_interval']) ? sanitize_text_field($rule_data['billing_interval']) : null,
+                'new_price' => floatval($rule_data['new_price']),
+                'enabled' => 1,
+                'created_at' => current_time('mysql'),
+                'updated_at' => current_time('mysql')
+            ),
+            array('%s', '%s', '%d', '%s', '%f', '%f', '%f', '%d', '%s', '%f', '%d', '%s', '%s')
         );
         
-        $rules = get_option('mpsp_price_update_rules', array());
-        $rules[] = $rule;
-        update_option('mpsp_price_update_rules', $rules);
+        if ($result === false) {
+            wp_send_json_error('Failed to save rule');
+        }
         
         wp_send_json_success();
     }
@@ -926,16 +1071,61 @@ class MP_Stripe_Price_Updater {
             wp_send_json_error('Insufficient permissions');
         }
         
-        $rule_index = intval($_POST['rule_index']);
-        $rules = get_option('mpsp_price_update_rules', array());
+        global $wpdb;
+        $rule_id = intval($_POST['rule_id']);
         
-        if (isset($rules[$rule_index])) {
-            unset($rules[$rule_index]);
-            $rules = array_values($rules); // Re-index array
-            update_option('mpsp_price_update_rules', $rules);
+        if (empty($rule_id)) {
+            wp_send_json_error('Rule ID is required');
         }
         
-        wp_send_json_success();
+        // Check if rule exists
+        $rule = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}mpsp_rules WHERE id = %d",
+            $rule_id
+        ));
+        
+        if (!$rule) {
+            wp_send_json_error('Rule not found');
+        }
+        
+        // Manual cascade deletion since foreign keys aren't reliable in WordPress
+        
+        // Get job IDs for this rule
+        $job_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT id FROM {$wpdb->prefix}mpsp_jobs WHERE rule_id = %d",
+            $rule_id
+        ));
+        
+        // Delete entries for these jobs
+        if (!empty($job_ids)) {
+            $job_ids_placeholder = implode(',', array_fill(0, count($job_ids), '%d'));
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM {$wpdb->prefix}mpsp_entries WHERE job_id IN ($job_ids_placeholder)",
+                ...$job_ids
+            ));
+        }
+        
+        // Delete jobs for this rule
+        $wpdb->delete(
+            $wpdb->prefix . 'mpsp_jobs',
+            array('rule_id' => $rule_id),
+            array('%d')
+        );
+        
+        // Delete the rule
+        $result = $wpdb->delete(
+            $wpdb->prefix . 'mpsp_rules',
+            array('id' => $rule_id),
+            array('%d')
+        );
+        
+        if ($result === false) {
+            wp_send_json_error('Failed to delete rule');
+        }
+        
+        wp_send_json_success(array(
+            'message' => 'Rule deleted successfully. All associated jobs and entries have been removed.'
+        ));
     }
     
     public function ajax_enable_rule() {
@@ -947,14 +1137,27 @@ class MP_Stripe_Price_Updater {
             wp_send_json_error('Insufficient permissions');
         }
         
-        $rule_index = intval($_POST['rule_index']);
-        $rules = get_option('mpsp_price_update_rules', array());
+        global $wpdb;
+        $rule_id = intval($_POST['rule_id']);
         
-        if (isset($rules[$rule_index])) {
-            $rules[$rule_index]['enabled'] = true;
-            // Remove auto-disabled timestamp when manually re-enabled
-            unset($rules[$rule_index]['auto_disabled_at']);
-            update_option('mpsp_price_update_rules', $rules);
+        if (empty($rule_id)) {
+            wp_send_json_error('Rule ID is required');
+        }
+        
+        $result = $wpdb->update(
+            $wpdb->prefix . 'mpsp_rules',
+            array(
+                'enabled' => 1,
+                'auto_disabled_at' => null,
+                'updated_at' => current_time('mysql')
+            ),
+            array('id' => $rule_id),
+            array('%d', '%s', '%s'),
+            array('%d')
+        );
+        
+        if ($result === false) {
+            wp_send_json_error('Failed to enable rule');
         }
         
         wp_send_json_success();
@@ -970,20 +1173,31 @@ class MP_Stripe_Price_Updater {
         }
         
         // Check if there's already an active job
-        $current_job = get_option('mpsp_current_job', null);
-        if ($current_job && !empty($current_job['active'])) {
+        global $wpdb;
+        $active_job = $wpdb->get_row(
+            "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1 AND status = 'running'"
+        );
+        if ($active_job) {
             wp_send_json_error('Another processing job is currently running');
         }
+        $rule_id = intval($_POST['rule_id']);
         
-        $rule_index = intval($_POST['rule_index']);
-        $rules = get_option('mpsp_price_update_rules', array());
+        if (empty($rule_id)) {
+            wp_send_json_error('Rule ID is required');
+        }
         
-        if (!isset($rules[$rule_index])) {
+        $rule = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}mpsp_rules WHERE id = %d",
+            $rule_id
+        ), ARRAY_A);
+        
+        if (!$rule) {
             wp_send_json_error('Rule not found');
         }
         
-        // Start the job
-        $this->start_background_job($rules[$rule_index], $rule_index);
+        // Get matching subscriptions and start the job
+        $matching_subscriptions = $this->get_matching_subscriptions($rule);
+        $this->start_new_job($rule, $matching_subscriptions);
         
         wp_send_json_success(array('message' => 'Job started successfully'));
     }
@@ -997,12 +1211,28 @@ class MP_Stripe_Price_Updater {
             wp_send_json_error('Insufficient permissions');
         }
         
-        $job_status = get_option('mpsp_current_job', null);
+        global $wpdb;
+        $current_job = $wpdb->get_row(
+            "SELECT j.*, r.name as rule_name FROM {$wpdb->prefix}mpsp_jobs j LEFT JOIN {$wpdb->prefix}mpsp_rules r ON j.rule_id = r.id WHERE j.current_job = 1 LIMIT 1",
+            ARRAY_A
+        );
         
-        if (!$job_status || empty($job_status['active'])) {
+        if (!$current_job) {
             wp_send_json_success(array('active' => false));
         } else {
-            wp_send_json_success($job_status);
+            // Calculate progress percentage
+            $progress = $current_job['total_subscriptions'] > 0 ? 
+                round(($current_job['processed_count'] / $current_job['total_subscriptions']) * 100, 1) : 0;
+                
+            wp_send_json_success(array(
+                'active' => true,
+                'rule_name' => $current_job['rule_name'],
+                'total' => $current_job['total_subscriptions'],
+                'processed' => $current_job['processed_count'],
+                'errors' => $current_job['error_count'],
+                'progress' => $progress,
+                'message' => "Processing subscription {$current_job['processed_count']} of {$current_job['total_subscriptions']}"
+            ));
         }
     }
     
@@ -1015,14 +1245,26 @@ class MP_Stripe_Price_Updater {
             wp_send_json_error('Insufficient permissions');
         }
         
-        // Mark job as cancelled
-        $job_status = get_option('mpsp_current_job', array());
-        $job_status['active'] = false;
-        $job_status['cancelled'] = true;
-        $job_status['message'] = 'Job cancelled by user';
-        update_option('mpsp_current_job', $job_status);
+        global $wpdb;
         
-        wp_send_json_success(array('message' => 'Job cancelled successfully'));
+        // Mark current job as cancelled in database
+        $updated = $wpdb->update(
+            $wpdb->prefix . 'mpsp_jobs',
+            array(
+                'status' => 'cancelled',
+                'completed_at' => current_time('mysql'),
+                'current_job' => 0
+            ),
+            array('current_job' => 1),
+            array('%s', '%s', '%d'),
+            array('%d')
+        );
+        
+        if ($updated) {
+            wp_send_json_success(array('message' => 'Job cancelled successfully'));
+        } else {
+            wp_send_json_error('No active job found to cancel');
+        }
     }
     
     public function ajax_download_csv_report() {
@@ -1036,16 +1278,29 @@ class MP_Stripe_Price_Updater {
                 wp_die('Insufficient permissions');
             }
             
-            $report_index = intval($_POST['report_index']);
-            $reports = get_option('mpsp_job_reports', array());
+            global $wpdb;
+            $job_id = intval($_POST['job_id']);
             
-            if (!isset($reports[$report_index])) {
-                wp_die('Report not found');
+            if (empty($job_id)) {
+                wp_die('Job ID is required');
             }
             
-            $report = $reports[$report_index];
+            // Get job from database
+            $job = $wpdb->get_row($wpdb->prepare(
+                "SELECT j.*, r.name as rule_name FROM {$wpdb->prefix}mpsp_jobs j 
+                 LEFT JOIN {$wpdb->prefix}mpsp_rules r ON j.rule_id = r.id 
+                 WHERE j.id = %d",
+                $job_id
+            ), ARRAY_A);
+            
+            if (!$job) {
+                wp_die('Job not found');
+            }
+            
+            // Generate CSV report from database data
+            $report = $this->generate_job_report($job);
             $csv_content = $this->generate_csv_report($report);
-            $filename = 'stripe-price-update-report-' . substr($report['job_id'], 0, 8) . '.csv';
+            $filename = 'stripe-price-update-report-job-' . $job_id . '.csv';
             
             // Set headers for CSV download
             header('Content-Type: text/csv');
@@ -1058,6 +1313,160 @@ class MP_Stripe_Price_Updater {
         }
         
         wp_send_json_error('Invalid request');
+    }
+    
+    public function ajax_get_job_log() {
+        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+            wp_send_json_error('Invalid nonce');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+        }
+        
+        global $wpdb;
+        $job_id = intval($_POST['job_id']);
+        
+        if (empty($job_id)) {
+            wp_send_json_error('Job ID is required');
+        }
+        
+        // Get entries for this job from the database
+        $entries = $wpdb->get_results($wpdb->prepare("
+            SELECT e.*, u.display_name as user_display_name, u.user_email
+            FROM {$wpdb->prefix}mpsp_entries e
+            LEFT JOIN {$wpdb->users} u ON e.user_id = u.ID
+            WHERE e.job_id = %d
+            ORDER BY e.processed_at DESC
+        ", $job_id), ARRAY_A);
+        
+        // Format entries for display
+        $job_log_entries = array();
+        foreach ($entries as $entry) {
+            $job_log_entries[] = array(
+                'updated_at' => date('Y-m-d H:i:s', strtotime($entry['processed_at'])),
+                'subscription_id' => $entry['subscription_id'],
+                'old_price' => MeprAppHelper::format_currency($entry['old_price']),
+                'new_price' => MeprAppHelper::format_currency($entry['new_price']),
+                'status' => $entry['status'],
+                'message' => $entry['error_message'] ?: 'Success'
+            );
+        }
+        
+        wp_send_json_success($job_log_entries);
+    }
+    
+    public function ajax_get_job_entries() {
+        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+            wp_send_json_error('Invalid nonce');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+        }
+        
+        global $wpdb;
+        $job_id = intval($_POST['job_id']);
+        
+        if (empty($job_id)) {
+            wp_send_json_error('Job ID is required');
+        }
+        
+        // Get entries for this job with user information
+        $entries = $wpdb->get_results($wpdb->prepare("
+            SELECT e.*, u.display_name as user_display_name, u.user_email
+            FROM {$wpdb->prefix}mpsp_entries e
+            LEFT JOIN {$wpdb->users} u ON e.user_id = u.ID
+            WHERE e.job_id = %d
+            ORDER BY e.processed_at DESC
+        ", $job_id), ARRAY_A);
+        
+        // Format entries for display
+        $formatted_entries = array();
+        foreach ($entries as $entry) {
+            $formatted_entries[] = array(
+                'processed_at' => date('Y-m-d H:i:s', strtotime($entry['processed_at'])),
+                'subscription_id' => $entry['subscription_id'],
+                'user_display_name' => $entry['user_display_name'] . ' (' . $entry['user_email'] . ')',
+                'old_price' => MeprAppHelper::format_currency($entry['old_price']),
+                'new_price' => MeprAppHelper::format_currency($entry['new_price']),
+                'status' => $entry['status'],
+                'api_mode' => $entry['api_mode'],
+                'error_message' => $entry['error_message']
+            );
+        }
+        
+        wp_send_json_success($formatted_entries);
+    }
+    
+    public function ajax_delete_job() {
+        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+            wp_send_json_error('Invalid nonce');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+        }
+        
+        global $wpdb;
+        $job_id = intval($_POST['job_id']);
+        
+        if (empty($job_id)) {
+            wp_send_json_error('Job ID is required');
+        }
+        
+        // Delete entries first
+        $entries_deleted = $wpdb->delete(
+            $wpdb->prefix . 'mpsp_entries',
+            array('job_id' => $job_id),
+            array('%d')
+        );
+        
+        // Delete the job
+        $job_deleted = $wpdb->delete(
+            $wpdb->prefix . 'mpsp_jobs',
+            array('id' => $job_id),
+            array('%d')
+        );
+        
+        if ($job_deleted !== false) {
+            wp_send_json_success(array(
+                'message' => sprintf('Job deleted successfully. Removed %d entries.', $entries_deleted),
+                'entries_deleted' => $entries_deleted
+            ));
+        } else {
+            wp_send_json_error('Failed to delete job');
+        }
+    }
+    
+    public function ajax_purge_all_data() {
+        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+            wp_send_json_error('Invalid nonce');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+        }
+        
+        global $wpdb;
+        
+        // Get counts before deletion
+        $entries_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}mpsp_entries");
+        $jobs_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}mpsp_jobs");
+        $rules_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}mpsp_rules");
+        
+        // Delete all data (in proper order due to foreign keys)
+        $wpdb->query("DELETE FROM {$wpdb->prefix}mpsp_entries");
+        $wpdb->query("DELETE FROM {$wpdb->prefix}mpsp_jobs");
+        $wpdb->query("DELETE FROM {$wpdb->prefix}mpsp_rules");
+        
+        wp_send_json_success(array(
+            'message' => sprintf('All data purged successfully. Removed %d rules, %d jobs, and %d entries.', 
+                $rules_count, $jobs_count, $entries_count),
+            'rules_deleted' => $rules_count,
+            'jobs_deleted' => $jobs_count,
+            'entries_deleted' => $entries_count
+        ));
     }
     
     private function get_memberships_with_active_subscriptions($gateway_id) {
@@ -1154,9 +1563,13 @@ class MP_Stripe_Price_Updater {
     }
     
     public function process_price_updates() {
+        global $wpdb;
+        
         // Check if there's already an active job
-        $current_job = get_option('mpsp_current_job', null);
-        if ($current_job && !empty($current_job['active'])) {
+        $current_job = $wpdb->get_row(
+            "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1 AND status = 'running'"
+        );
+        if ($current_job) {
             return; // Another job is running
         }
         
@@ -1166,101 +1579,173 @@ class MP_Stripe_Price_Updater {
             return;
         }
         
-        $rules = get_option('mpsp_price_update_rules', array());
+        // Get enabled rules
+        $rules = $wpdb->get_results(
+            "SELECT * FROM {$wpdb->prefix}mpsp_rules WHERE enabled = 1 ORDER BY updated_at ASC",
+            ARRAY_A
+        );
         
         if (empty($rules)) {
-            return; // No rules to process
+            // No enabled rules to process - this is normal when all rules are completed
+            return;
         }
         
-        // Find the first enabled rule that has work to do
-        $rules_updated = false;
-        foreach ($rules as $index => $rule) {
-            if (!empty($rule['enabled'])) {
-                try {
-                    // Check if this rule has any matching subscriptions before starting a job
-                    $matching_subscriptions = $this->get_matching_subscriptions($rule);
-                    if (count($matching_subscriptions) > 0) {
-                        $this->start_background_job($rule, $index, $matching_subscriptions);
-                        break; // Only process one rule at a time
-                    } else {
-                        // If rule has processed subscriptions before but now has no matches, 
-                        // it may have completed its work - disable it to prevent future runs
-                        if (!empty($rule['processed_count']) && $rule['processed_count'] > 0) {
-                            $rules[$index]['enabled'] = false;
-                            $rules[$index]['auto_disabled_at'] = current_time('mysql');
-                            $rules_updated = true;
-                        }
-                    }
-                } catch (Exception $e) {
-                    error_log('MemberPress Stripe Price Updater cron error: ' . $e->getMessage());
+        // Check if there's already a running job that we should continue
+        $existing_job = $wpdb->get_row(
+            "SELECT j.*, r.name as rule_name FROM {$wpdb->prefix}mpsp_jobs j 
+             INNER JOIN {$wpdb->prefix}mpsp_rules r ON j.rule_id = r.id 
+             WHERE j.status = 'running' AND r.enabled = 1 
+             ORDER BY j.started_at ASC LIMIT 1",
+            ARRAY_A
+        );
+        
+        if ($existing_job) {
+            // Continue the existing job
+            $this->continue_background_job($existing_job);
+            return;
+        }
+        
+        // No running job exists, check for rules that need new jobs
+        foreach ($rules as $rule) {
+            try {
+                $matching_subscriptions = $this->get_matching_subscriptions($rule);
+                if (count($matching_subscriptions) > 0) {
+                    $this->start_new_job($rule, $matching_subscriptions);
+                    break; // Only start one new job at a time
+                } else {
+                    // Auto-disable rules that have no more work to do
+                    $this->check_and_auto_disable_rule($rule);
                 }
+            } catch (Exception $e) {
+                error_log('MemberPress Stripe Price Updater cron error: ' . $e->getMessage());
             }
-        }
-        
-        // Save updated rules if any were auto-disabled
-        if ($rules_updated) {
-            update_option('mpsp_price_update_rules', $rules);
         }
     }
     
-    private function start_background_job($rule, $rule_index, $matching_subscriptions = null) {
-        // Get matching subscriptions if not already provided (for manual processing)
-        if ($matching_subscriptions === null) {
-            $matching_subscriptions = $this->get_matching_subscriptions($rule);
-        }
-        $total_subscriptions = count($matching_subscriptions);
+    private function start_new_job($rule, $all_matching_subscriptions) {
+        global $wpdb;
         
-        // If no subscriptions match, don't start a job or send notifications
+        $total_subscriptions = count($all_matching_subscriptions);
+        
+        // If no subscriptions match, don't start a job
         if ($total_subscriptions === 0) {
-            return; // Silent return - no job, no notifications
+            return;
         }
-        
-        // Generate unique job ID for detailed logging
-        $job_id = uniqid('job_', true);
-        update_option('mpsp_current_job_id', $job_id);
-        
-        // Initialize job status
-        $job_status = array(
-            'active' => true,
-            'job_id' => $job_id,
-            'rule_name' => $rule['name'],
-            'rule_index' => $rule_index,
-            'started_at' => current_time('mysql'),
-            'message' => 'Initializing job...',
-            'processed' => 0,
-            'total' => 0,
-            'errors' => 0,
-            'cancelled' => false
-        );
-        
-        update_option('mpsp_current_job', $job_status);
-        
-        // Initialize detailed log for this job
-        update_option('mpsp_detailed_job_log_' . $job_id, array());
         
         // Safety check: Limit processing to prevent timeouts and server overload
         $max_per_run = apply_filters('mpsp_max_subscriptions_per_run', 25);
-        if ($total_subscriptions > $max_per_run) {
-            $matching_subscriptions = array_slice($matching_subscriptions, 0, $max_per_run);
-            $job_status['message'] = "Processing {$max_per_run} of {$total_subscriptions} matching subscriptions (limited for safety)...";
-        } else {
-            $job_status['message'] = "Processing {$total_subscriptions} subscriptions...";
+        $subscriptions_to_process = array_slice($all_matching_subscriptions, 0, $max_per_run);
+        
+        // Create job in database with TOTAL subscription count, not just the batch
+        $job_id = $wpdb->insert(
+            $wpdb->prefix . 'mpsp_jobs',
+            array(
+                'rule_id' => $rule['id'],
+                'status' => 'running',
+                'total_subscriptions' => $total_subscriptions, // Full count, not batch
+                'processed_count' => 0,
+                'success_count' => 0,
+                'error_count' => 0,
+                'started_at' => current_time('mysql'),
+                'last_activity_at' => current_time('mysql'),
+                'current_job' => 1
+            ),
+            array('%d', '%s', '%d', '%d', '%d', '%d', '%s', '%s', '%d')
+        );
+        
+        if ($job_id === false) {
+            error_log('Failed to create job in database');
+            return;
         }
         
-        $job_status['total'] = count($matching_subscriptions);
-        $job_status['total_available'] = $total_subscriptions;
-        update_option('mpsp_current_job', $job_status);
+        $job_id = $wpdb->insert_id;
         
-        // Process in background
-        $this->process_job_subscriptions($rule, $rule_index, $matching_subscriptions);
+        // Process first batch of subscriptions
+        $this->process_job_subscriptions($job_id, $rule, $subscriptions_to_process);
     }
     
-    private function process_job_subscriptions($rule, $rule_index, $matching_subscriptions) {
-        $job_status = get_option('mpsp_current_job', array());
-        $job_id = $job_status['job_id'] ?? uniqid();
-        $processed_count = 0;
+    private function continue_background_job($existing_job) {
+        global $wpdb;
+        
+        // Get the rule for this job
+        $rule = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}mpsp_rules WHERE id = %d",
+            $existing_job['rule_id']
+        ), ARRAY_A);
+        
+        if (!$rule) {
+            error_log('MPSP: Rule not found for job ' . $existing_job['id']);
+            return;
+        }
+        
+        // Get all matching subscriptions for this rule
+        $all_matching_subscriptions = $this->get_matching_subscriptions($rule);
+        
+        // Get subscription IDs that have already been processed in this job
+        $processed_subscription_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT subscription_id FROM {$wpdb->prefix}mpsp_entries WHERE job_id = %d",
+            $existing_job['id']
+        ));
+        
+        // Filter out already processed subscriptions
+        $remaining_subscriptions = array();
+        foreach ($all_matching_subscriptions as $sub_data) {
+            if (!in_array($sub_data['subscription']->id, $processed_subscription_ids)) {
+                $remaining_subscriptions[] = $sub_data;
+            }
+        }
+        
+        // Check if job is complete
+        if (empty($remaining_subscriptions)) {
+            // Job is complete - all subscriptions have been processed
+            $this->complete_job($rule, null, $existing_job['processed_count'], $existing_job['error_count'], array());
+            return;
+        }
+        
+        // Process next batch
+        $max_per_run = apply_filters('mpsp_max_subscriptions_per_run', 25);
+        $subscriptions_to_process = array_slice($remaining_subscriptions, 0, $max_per_run);
+        
+        $this->process_job_subscriptions($existing_job['id'], $rule, $subscriptions_to_process);
+    }
+    
+    private function check_and_auto_disable_rule($rule) {
+        global $wpdb;
+        
+        // Only disable if this rule has processed subscriptions before
+        $processed_count = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->prefix}mpsp_jobs WHERE rule_id = %d AND status = 'completed' AND processed_count > 0",
+            $rule['id']
+        ));
+        
+        if ($processed_count > 0) {
+            // This rule has done work before but now has no matching subscriptions
+            // Auto-disable it to prevent unnecessary processing
+            $wpdb->update(
+                $wpdb->prefix . 'mpsp_rules',
+                array(
+                    'enabled' => 0,
+                    'auto_disabled_at' => current_time('mysql'),
+                    'updated_at' => current_time('mysql')
+                ),
+                array('id' => $rule['id']),
+                array('%d', '%s', '%s'),
+                array('%d')
+            );
+            
+            error_log(sprintf(
+                'MPSP: Auto-disabled rule "%s" (ID: %d) - no more subscriptions to process',
+                $rule['name'],
+                $rule['id']
+            ));
+        }
+    }
+    
+    private function process_job_subscriptions($job_id, $rule, $matching_subscriptions) {
+        global $wpdb;
+        
+        $success_count = 0;
         $error_count = 0;
-        $errors = array();
         
         // Set up timeout protection  
         $start_time = time();
@@ -1268,41 +1753,36 @@ class MP_Stripe_Price_Updater {
         
         foreach ($matching_subscriptions as $sub_data) {
             // Check if job was cancelled
-            $current_job = get_option('mpsp_current_job', array());
-            if (!empty($current_job['cancelled'])) {
+            $current_job = $wpdb->get_row($wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d AND status = 'cancelled'",
+                $job_id
+            ));
+            if ($current_job) {
                 break;
             }
             
             // Check execution time to prevent timeouts
             if ((time() - $start_time) > $max_execution_time) {
-                $errors[] = "Job stopped due to execution time limit ({$max_execution_time} seconds)";
-                $job_status['message'] = 'Job stopped due to time limit - will continue in next 5-minute cycle';
-                update_option('mpsp_current_job', $job_status);
+                // Update job status to indicate time limit reached
+                $wpdb->update(
+                    $wpdb->prefix . 'mpsp_jobs',
+                    array(
+                        'last_activity_at' => current_time('mysql'),
+                        'processed_count' => $success_count + $error_count,
+                        'success_count' => $success_count,
+                        'error_count' => $error_count
+                    ),
+                    array('id' => $job_id),
+                    array('%s', '%d', '%d', '%d'),
+                    array('%d')
+                );
                 break;
             }
             
             $subscription = $sub_data['subscription'];
             $user = $sub_data['user'];
             
-            // Prepare detailed log entry
-            $log_entry = array(
-                'subscription_id' => $subscription->id,
-                'user_email' => $user->user_email,
-                'user_name' => $user->display_name,
-                'old_price' => $subscription->price,
-                'new_price' => $rule['new_price'],
-                'stripe_subscription_id' => $subscription->subscr_id,
-                'updated_at' => current_time('mysql'),
-                'status' => 'pending',
-                'error_message' => ''
-            );
-            
             try {
-                // Update progress
-                $job_status['processed'] = $processed_count;
-                $job_status['message'] = "Processing subscription {$subscription->id}...";
-                update_option('mpsp_current_job', $job_status);
-                
                 // Update in Stripe first
                 $stripe_result = $this->update_stripe_subscription($subscription, $rule);
                 
@@ -1311,107 +1791,175 @@ class MP_Stripe_Price_Updater {
                     $mp_result = $this->update_memberpress_subscription($subscription, $rule);
                     
                     if ($mp_result['success']) {
-                        $processed_count++;
-                        $log_entry['status'] = 'success';
-                        $log_entry['api_mode'] = $stripe_result['api_mode'] ?? 'unknown';
-                        $log_entry['stripe_price_id'] = $stripe_result['stripe_price_id'] ?? '';
-                        $this->log_price_update($subscription->id, $subscription->price, $rule['new_price'], 'success');
+                        $success_count++;
+                        $status = 'success';
+                        $error_message = null;
                     } else {
                         $error_count++;
-                        $log_entry['status'] = 'mp_failed';
-                        $log_entry['error_message'] = $mp_result['message'];
-                        $log_entry['api_mode'] = $stripe_result['api_mode'] ?? 'unknown';
-                        $errors[] = "Failed to update MemberPress subscription {$subscription->id}: {$mp_result['message']}";
-                        $this->log_price_update($subscription->id, $subscription->price, $rule['new_price'], 'mp_failed', $mp_result['message']);
+                        $status = 'error';
+                        $error_message = 'MemberPress update failed: ' . $mp_result['message'];
                     }
                 } else {
                     $error_count++;
-                    $log_entry['status'] = 'stripe_failed';
-                    $log_entry['error_message'] = $stripe_result['message'];
-                    $errors[] = "Failed to update Stripe subscription {$subscription->subscr_id}: {$stripe_result['message']}";
-                    $this->log_price_update($subscription->id, $subscription->price, $rule['new_price'], 'stripe_failed', $stripe_result['message']);
+                    $status = 'error';
+                    $error_message = 'Stripe update failed: ' . $stripe_result['message'];
                 }
+                
+                // Create entry in database
+                $wpdb->insert(
+                    $wpdb->prefix . 'mpsp_entries',
+                    array(
+                        'job_id' => $job_id,
+                        'subscription_id' => $subscription->id,
+                        'user_id' => $user->ID,
+                        'old_price' => $subscription->price,
+                        'new_price' => $rule['new_price'],
+                        'status' => $status,
+                        'stripe_price_id' => $stripe_result['stripe_price_id'] ?? null,
+                        'api_mode' => $stripe_result['api_mode'] ?? 'unknown',
+                        'error_message' => $error_message,
+                        'processed_at' => current_time('mysql')
+                    ),
+                    array('%d', '%d', '%d', '%f', '%f', '%s', '%s', '%s', '%s', '%s')
+                );
+                
             } catch (Exception $e) {
                 $error_count++;
-                $log_entry['status'] = 'exception';
-                $log_entry['error_message'] = $e->getMessage();
-                $errors[] = "Exception processing subscription {$subscription->id}: " . $e->getMessage();
-                $this->log_price_update($subscription->id, $subscription->price, $rule['new_price'], 'exception', $e->getMessage());
+                
+                // Create error entry
+                $wpdb->insert(
+                    $wpdb->prefix . 'mpsp_entries',
+                    array(
+                        'job_id' => $job_id,
+                        'subscription_id' => $subscription->id,
+                        'user_id' => $user->ID,
+                        'old_price' => $subscription->price,
+                        'new_price' => $rule['new_price'],
+                        'status' => 'error',
+                        'stripe_price_id' => null,
+                        'api_mode' => 'unknown',
+                        'error_message' => 'Exception: ' . $e->getMessage(),
+                        'processed_at' => current_time('mysql')
+                    ),
+                    array('%d', '%d', '%d', '%f', '%f', '%s', '%s', '%s', '%s', '%s')
+                );
             }
             
-            // Add to detailed job log
-            $detailed_log = get_option('mpsp_detailed_job_log_' . $job_id, array());
-            $detailed_log[] = $log_entry;
-            update_option('mpsp_detailed_job_log_' . $job_id, $detailed_log);
-            
-            // Update job status
-            $job_status['processed'] = $processed_count;
-            $job_status['errors'] = $error_count;
-            update_option('mpsp_current_job', $job_status);
+            // Update job progress
+            $wpdb->update(
+                $wpdb->prefix . 'mpsp_jobs',
+                array(
+                    'last_activity_at' => current_time('mysql'),
+                    'processed_count' => $success_count + $error_count,
+                    'success_count' => $success_count,
+                    'error_count' => $error_count
+                ),
+                array('id' => $job_id),
+                array('%s', '%d', '%d', '%d'),
+                array('%d')
+            );
         }
         
         // Complete the job
-        $this->complete_job($rule, $rule_index, $processed_count, $error_count, $errors);
+        $this->complete_job($job_id, $rule, $success_count, $error_count);
     }
     
     private function complete_job($rule, $rule_index, $processed_count, $error_count, $errors) {
         try {
-            // Update rule stats
-            $rules = get_option('mpsp_price_update_rules', array());
-            if (isset($rules[$rule_index])) {
-                $rules[$rule_index]['last_processed'] = current_time('mysql');
-                $rules[$rule_index]['processed_count'] = ($rules[$rule_index]['processed_count'] ?? 0) + $processed_count;
-                update_option('mpsp_price_update_rules', $rules);
+            global $wpdb;
+            
+            // Update rule stats in database
+            if (!empty($rule['id'])) {
+                $wpdb->update(
+                    $wpdb->prefix . 'mpsp_rules',
+                    array(
+                        'updated_at' => current_time('mysql')
+                    ),
+                    array('id' => $rule['id']),
+                    array('%s'),
+                    array('%d')
+                );
             }
             
-            // Generate detailed job report
-            $job_report = $this->generate_job_report($rule, $processed_count, $error_count);
+            // Get current job from database
+            $current_job = $wpdb->get_row($wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1 LIMIT 1"
+            ), ARRAY_A);
             
-            // Clear job status
-            $job_status = get_option('mpsp_current_job', array());
-            $was_cancelled = !empty($job_status['cancelled']);
-            delete_option('mpsp_current_job');
+            if ($current_job) {
+                $was_cancelled = ($current_job['status'] === 'cancelled');
+                $final_status = $was_cancelled ? 'cancelled' : ($error_count > 0 ? 'completed' : 'completed');
+                
+                // Update job completion in database
+                $wpdb->update(
+                    $wpdb->prefix . 'mpsp_jobs',
+                    array(
+                        'status' => $final_status,
+                        'processed_count' => $processed_count,
+                        'error_count' => $error_count,
+                        'success_count' => $processed_count - $error_count,
+                        'completed_at' => current_time('mysql'),
+                        'current_job' => 0
+                    ),
+                    array('id' => $current_job['id']),
+                    array('%s', '%d', '%d', '%d', '%s', '%d'),
+                    array('%d')
+                );
+            }
             
-            // Send admin email notification with CSV report
-            $this->send_completion_email($rule, $processed_count, $error_count, $errors, $was_cancelled, $job_report);
+            // Generate job report and send admin email notification
+            if ($current_job) {
+                $job_report = $this->generate_job_report($current_job);
+                $this->send_completion_email($rule, $processed_count, $error_count, $errors, $was_cancelled ?? false, $job_report);
+            }
         } catch (Exception $e) {
             error_log('Error completing job: ' . $e->getMessage());
             // Ensure job status is cleared even if completion fails
-            delete_option('mpsp_current_job');
+            global $wpdb;
+            $wpdb->query("UPDATE {$wpdb->prefix}mpsp_jobs SET current_job = 0 WHERE current_job = 1");
         }
     }
     
-    private function generate_job_report($rule, $processed_count, $error_count) {
-        // Get the detailed log entries for this job session
-        $job_id = get_option('mpsp_current_job_id', uniqid());
-        $detailed_log = get_option('mpsp_detailed_job_log_' . $job_id, array());
+    private function generate_job_report($job_data) {
+        global $wpdb;
         
-        $report = array(
-            'job_id' => $job_id,
-            'rule_name' => $rule['name'],
-            'started_at' => get_option('mpsp_current_job', array())['started_at'] ?? current_time('mysql'),
-            'completed_at' => current_time('mysql'),
-            'processed_count' => $processed_count,
-            'error_count' => $error_count,
-            'detailed_log' => $detailed_log
-        );
+        // Get detailed entries for this job from the database
+        $entries = $wpdb->get_results($wpdb->prepare("
+            SELECT e.*, u.display_name as user_display_name, u.user_email
+            FROM {$wpdb->prefix}mpsp_entries e
+            LEFT JOIN {$wpdb->users} u ON e.user_id = u.ID
+            WHERE e.job_id = %d
+            ORDER BY e.processed_at ASC
+        ", $job_data['id']), ARRAY_A);
         
-        // Store the report for display on admin page
-        $reports = get_option('mpsp_job_reports', array());
-        $reports[] = $report;
-        
-        // Keep only last 15 reports
-        if (count($reports) > 15) {
-            $reports = array_slice($reports, -15);
+        // Format entries for CSV generation
+        $detailed_log = array();
+        foreach ($entries as $entry) {
+            $detailed_log[] = array(
+                'subscription_id' => $entry['subscription_id'],
+                'user_email' => $entry['user_email'],
+                'user_name' => $entry['user_display_name'],
+                'old_price' => $entry['old_price'],
+                'new_price' => $entry['new_price'],
+                'status' => $entry['status'],
+                'error_message' => $entry['error_message'],
+                'stripe_subscription_id' => '', // This would need to be added to entries table if needed
+                'api_mode' => $entry['api_mode'],
+                'stripe_price_id' => $entry['stripe_price_id'],
+                'updated_at' => $entry['processed_at']
+            );
         }
         
-        update_option('mpsp_job_reports', $reports);
-        
-        // Clean up the detailed log
-        delete_option('mpsp_detailed_job_log_' . $job_id);
-        delete_option('mpsp_current_job_id');
-        
-        return $report;
+        return array(
+            'job_id' => $job_data['id'],
+            'rule_name' => $job_data['rule_name'] ?? 'Unknown Rule',
+            'rule_id' => $job_data['rule_id'],
+            'started_at' => $job_data['started_at'],
+            'completed_at' => $job_data['completed_at'] ?? current_time('mysql'),
+            'processed_count' => $job_data['processed_count'],
+            'error_count' => $job_data['error_count'],
+            'detailed_log' => $detailed_log
+        );
     }
     
     private function generate_csv_report($report) {
@@ -1673,32 +2221,24 @@ class MP_Stripe_Price_Updater {
     }
     
     
-    private function log_price_update($subscription_id, $old_price, $new_price, $status, $message = '') {
-        $log = get_option('mpsp_price_update_log', array());
-        
-        $log[] = array(
-            'subscription_id' => $subscription_id,
-            'old_price' => $old_price,
-            'new_price' => $new_price,
-            'status' => $status,
-            'message' => $message,
-            'updated_at' => current_time('mysql')
-        );
-        
-        // No artificial limit - entries will be cleaned up when job reports are cleaned up
-        
-        update_option('mpsp_price_update_log', $log);
-    }
-    
     private function display_active_rules() {
-        $rules = get_option('mpsp_price_update_rules', array());
+        global $wpdb;
+        
+        $rules = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}mpsp_rules ORDER BY created_at DESC", ARRAY_A);
         
         if (empty($rules)) {
-            echo '<p>No active price update rules.</p>';
+            echo '<p>No price update rules found.</p>';
             return;
         }
         
         ?>
+        <div style="margin-bottom: 20px;">
+            <button type="button" id="purge-all-data" class="button" style="background: #dc3232; color: white; border-color: #dc3232;">
+                Purge All Data
+            </button>
+            <small style="margin-left: 10px; color: #666;">This will delete ALL rules, jobs, and entries permanently.</small>
+        </div>
+        
         <div class="mpsp-table-container">
             <table class="wp-list-table widefat fixed striped mpsp-rules-table">
                 <thead>
@@ -1711,20 +2251,21 @@ class MP_Stripe_Price_Updater {
                         <th>Billing Filter</th>
                         <th>New Price</th>
                         <th>Created</th>
-                        <th>Last Processed</th>
-                        <th>Count</th>
+                        <th>Jobs</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($rules as $index => $rule): ?>
+                    <?php foreach ($rules as $rule): ?>
                     <tr>
                         <td><div class="mpsp-truncate" title="<?php echo esc_attr($rule['name']); ?>"><?php echo esc_html($rule['name']); ?></div></td>
                         <td>
                             <?php if (empty($rule['enabled'])): ?>
                                 <span class="mpsp-status-disabled">Disabled</span>
                                 <?php if (!empty($rule['auto_disabled_at'])): ?>
-                                    <br><small>Auto-disabled: <?php echo esc_html(date('Y-m-d H:i', strtotime($rule['auto_disabled_at']))); ?></small>
+                                    <br><small style="color: #666; font-style: italic;">
+                                        Auto-disabled: <?php echo esc_html(date('M j, Y H:i', strtotime($rule['auto_disabled_at']))); ?>
+                                    </small>
                                 <?php endif; ?>
                             <?php else: ?>
                                 <span class="mpsp-status-active">Active</span>
@@ -1752,15 +2293,22 @@ class MP_Stripe_Price_Updater {
                         </td>
                         <td><?php echo esc_html(MeprAppHelper::format_currency($rule['new_price'])); ?></td>
                         <td><?php echo esc_html(date('Y-m-d', strtotime($rule['created_at']))); ?></td>
-                        <td><?php echo $rule['last_processed'] ? esc_html(date('Y-m-d H:i', strtotime($rule['last_processed']))) : 'Never'; ?></td>
-                        <td><?php echo intval($rule['processed_count'] ?? 0); ?></td>
+                        <td>
+                            <?php
+                            $job_count = $wpdb->get_var($wpdb->prepare(
+                                "SELECT COUNT(*) FROM {$wpdb->prefix}mpsp_jobs WHERE rule_id = %d",
+                                $rule['id']
+                            ));
+                            echo intval($job_count);
+                            ?>
+                        </td>
                         <td class="mpsp-rule-actions">
                             <?php if (!empty($rule['enabled'])): ?>
-                                <button class="button button-small process-rule-now" data-index="<?php echo $index; ?>">Process Now</button>
+                                <button class="button button-small process-rule-now" data-rule-id="<?php echo $rule['id']; ?>">Process Now</button>
                             <?php else: ?>
-                                <button class="button button-small enable-rule" data-index="<?php echo $index; ?>">Enable</button>
+                                <button class="button button-small enable-rule" data-rule-id="<?php echo $rule['id']; ?>">Enable</button>
                             <?php endif; ?>
-                            <button class="button button-small delete-rule" data-index="<?php echo $index; ?>">Delete</button>
+                            <button class="button button-small delete-rule" data-rule-id="<?php echo $rule['id']; ?>">Delete</button>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -1768,69 +2316,25 @@ class MP_Stripe_Price_Updater {
             </table>
         </div>
         
-        <h3 style="margin-top: 30px;">Recent Processing Log</h3>
-        <?php $this->display_processing_log(); ?>
-        
-        <h3 style="margin-top: 30px;">Job Reports</h3>
-        <?php $this->display_job_reports(); ?>
+        <h3 style="margin-top: 30px;">Jobs</h3>
+        <?php $this->display_jobs(); ?>
         <?php
     }
     
-    private function display_processing_log() {
-        $log = get_option('mpsp_price_update_log', array());
+    private function display_jobs() {
+        global $wpdb;
         
-        if (empty($log)) {
-            echo '<p>No processing log entries yet.</p>';
+        $jobs = $wpdb->get_results("
+            SELECT j.*, r.name as rule_name 
+            FROM {$wpdb->prefix}mpsp_jobs j 
+            LEFT JOIN {$wpdb->prefix}mpsp_rules r ON j.rule_id = r.id 
+            ORDER BY j.started_at DESC
+        ", ARRAY_A);
+        
+        if (empty($jobs)) {
+            echo '<p>No jobs found.</p>';
             return;
         }
-        
-        // Show last 20 entries
-        $recent_log = array_slice(array_reverse($log), 0, 20);
-        
-        ?>
-        <div class="mpsp-table-container">
-            <table class="wp-list-table widefat fixed striped mpsp-log-table">
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Subscription ID</th>
-                        <th>Old Price</th>
-                        <th>New Price</th>
-                        <th>Status</th>
-                        <th>Message</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($recent_log as $entry): ?>
-                    <tr>
-                        <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($entry['updated_at']))); ?></td>
-                        <td><?php echo esc_html($entry['subscription_id']); ?></td>
-                        <td><?php echo esc_html(MeprAppHelper::format_currency($entry['old_price'])); ?></td>
-                        <td><?php echo esc_html(MeprAppHelper::format_currency($entry['new_price'])); ?></td>
-                        <td>
-                            <span class="<?php echo $entry['status'] === 'success' ? 'mpsp-status-success' : 'mpsp-status-error'; ?>">
-                                <?php echo esc_html(ucfirst($entry['status'])); ?>
-                            </span>
-                        </td>
-                        <td><div class="mpsp-truncate" title="<?php echo esc_attr($entry['message']); ?>"><?php echo esc_html($entry['message']); ?></div></td>
-                    </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-        <?php
-    }
-    
-    private function display_job_reports() {
-        $reports = get_option('mpsp_job_reports', array());
-        
-        if (empty($reports)) {
-            echo '<p>No job reports available yet.</p>';
-            return;
-        }
-        
-        // Show most recent reports first
-        $reports_reversed = array_reverse($reports);
         
         ?>
         <div class="mpsp-table-container">
@@ -1839,33 +2343,63 @@ class MP_Stripe_Price_Updater {
                     <tr>
                         <th>Job ID</th>
                         <th>Rule Name</th>
+                        <th>Status</th>
                         <th>Started</th>
                         <th>Completed</th>
                         <th>Processed</th>
+                        <th>Success</th>
                         <th>Errors</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($reports_reversed as $display_index => $report): 
-                        $actual_index = count($reports) - 1 - $display_index; // Calculate original index
-                    ?>
+                    <?php foreach ($jobs as $job): ?>
                     <tr>
-                        <td><span title="<?php echo esc_attr($report['job_id']); ?>"><?php echo esc_html(substr($report['job_id'], 0, 8)); ?>...</span></td>
-                        <td><div class="mpsp-truncate" title="<?php echo esc_attr($report['rule_name']); ?>"><?php echo esc_html($report['rule_name']); ?></div></td>
-                        <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($report['started_at']))); ?></td>
-                        <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($report['completed_at']))); ?></td>
-                        <td><?php echo intval($report['processed_count']); ?></td>
+                        <td><span title="Job ID: <?php echo esc_attr($job['id']); ?>"><?php echo esc_html($job['id']); ?></span></td>
+                        <td><div class="mpsp-truncate" title="<?php echo esc_attr($job['rule_name'] ?? 'Unknown'); ?>"><?php echo esc_html($job['rule_name'] ?? 'Unknown'); ?></div></td>
                         <td>
-                            <span class="<?php echo $report['error_count'] > 0 ? 'mpsp-status-error' : 'mpsp-status-success'; ?>">
-                                <?php echo intval($report['error_count']); ?>
+                            <?php
+                            $status_class = '';
+                            switch ($job['status']) {
+                                case 'completed':
+                                    $status_class = 'mpsp-status-success';
+                                    break;
+                                case 'running':
+                                    $status_class = 'mpsp-status-active';
+                                    break;
+                                case 'cancelled':
+                                case 'failed':
+                                    $status_class = 'mpsp-status-error';
+                                    break;
+                            }
+                            ?>
+                            <span class="<?php echo $status_class; ?>"><?php echo esc_html(ucfirst($job['status'])); ?></span>
+                        </td>
+                        <td><?php echo esc_html(date('Y-m-d H:i:s', strtotime($job['started_at']))); ?></td>
+                        <td><?php echo $job['completed_at'] ? esc_html(date('Y-m-d H:i:s', strtotime($job['completed_at']))) : '-'; ?></td>
+                        <td><?php echo intval($job['processed_count']); ?></td>
+                        <td><?php echo intval($job['success_count']); ?></td>
+                        <td>
+                            <span class="<?php echo $job['error_count'] > 0 ? 'mpsp-status-error' : 'mpsp-status-success'; ?>">
+                                <?php echo intval($job['error_count']); ?>
                             </span>
                         </td>
                         <td>
+                            <button class="button button-small view-job-entries" 
+                                    data-job-id="<?php echo esc_attr($job['id']); ?>">
+                                View Log
+                            </button>
+                            <?php if ($job['status'] === 'completed' && $job['processed_count'] > 0): ?>
                             <button class="button button-small download-csv-report" 
-                                    data-index="<?php echo $actual_index; ?>"
-                                    data-job-id="<?php echo esc_attr($report['job_id']); ?>">
+                                    data-job-id="<?php echo esc_attr($job['id']); ?>"
+                                    style="margin-left: 5px;">
                                 Download CSV
+                            </button>
+                            <?php endif; ?>
+                            <button class="button button-small delete-job" 
+                                    data-job-id="<?php echo esc_attr($job['id']); ?>"
+                                    style="margin-left: 5px;">
+                                Delete
                             </button>
                         </td>
                     </tr>
@@ -1878,8 +2412,12 @@ class MP_Stripe_Price_Updater {
         jQuery(document).ready(function($) {
             // Download CSV report buttons
             $(document).on('click', '.download-csv-report', function() {
-                var reportIndex = $(this).data('index');
                 var jobId = $(this).data('job-id');
+                
+                if (!jobId) {
+                    alert('Job ID not found');
+                    return;
+                }
                 
                 // Create a temporary form to submit the download request
                 var form = $('<form>', {
@@ -1892,8 +2430,8 @@ class MP_Stripe_Price_Updater {
                     'value': 'mpsp_download_csv_report'
                 })).append($('<input>', {
                     'type': 'hidden',
-                    'name': 'report_index',
-                    'value': reportIndex
+                    'name': 'job_id',
+                    'value': jobId
                 })).append($('<input>', {
                     'type': 'hidden',
                     'name': 'nonce',
@@ -1904,6 +2442,67 @@ class MP_Stripe_Price_Updater {
                 form.submit();
                 form.remove();
             });
+            
+            // View job log buttons
+            $(document).on('click', '.view-job-log', function() {
+                var jobId = $(this).data('job-id');
+                showJobLogModal(jobId);
+            });
+        });
+        
+        function showJobLogModal(jobId) {
+            $.post(mpsp_ajax.ajax_url, {
+                action: 'mpsp_get_job_log',
+                job_id: jobId,
+                nonce: mpsp_ajax.nonce
+            }, function(response) {
+                if (response.success) {
+                    var logEntries = response.data;
+                    var modalHtml = '<div id="job-log-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100000; display: flex; align-items: center; justify-content: center;">' +
+                        '<div style="background: white; padding: 20px; border-radius: 5px; max-width: 90%; max-height: 90%; overflow: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">' +
+                        '<h3>Job Log History - ' + jobId.substring(0, 8) + '...</h3>' +
+                        '<div class="mpsp-table-container" style="max-height: 60vh; overflow-y: auto;">' +
+                        '<table class="wp-list-table widefat fixed striped mpsp-log-table">' +
+                        '<thead><tr><th>Date</th><th>Subscription ID</th><th>Old Price</th><th>New Price</th><th>Status</th><th>Message</th></tr></thead>' +
+                        '<tbody>';
+                    
+                    if (logEntries.length === 0) {
+                        modalHtml += '<tr><td colspan="6" style="text-align: center; padding: 20px;">No log entries found for this job.</td></tr>';
+                    } else {
+                        logEntries.forEach(function(entry) {
+                            var statusClass = entry.status === 'success' ? 'mpsp-status-success' : 'mpsp-status-error';
+                            modalHtml += '<tr>' +
+                                '<td>' + entry.updated_at + '</td>' +
+                                '<td>' + entry.subscription_id + '</td>' +
+                                '<td>' + entry.old_price + '</td>' +
+                                '<td>' + entry.new_price + '</td>' +
+                                '<td><span class="' + statusClass + '">' + entry.status.charAt(0).toUpperCase() + entry.status.slice(1) + '</span></td>' +
+                                '<td><div class="mpsp-truncate" title="' + entry.message + '">' + entry.message + '</div></td>' +
+                                '</tr>';
+                        });
+                    }
+                    
+                    modalHtml += '</tbody></table></div>' +
+                        '<div style="margin-top: 20px; text-align: right;">' +
+                        '<button type="button" onclick="closeJobLogModal()" class="button button-primary">Close</button>' +
+                        '</div></div></div>';
+                    
+                    $('body').append(modalHtml);
+                } else {
+                    alert('Error loading job log: ' + response.data);
+                }
+            });
+        }
+        
+        function closeJobLogModal() {
+            $('#job-log-modal').remove();
+        }
+        
+        // Close modal when clicking outside
+        $(document).on('click', '#job-log-modal', function(e) {
+            if (e.target === this) {
+                closeJobLogModal();
+            }
         });
         </script>
         <?php
@@ -1932,47 +2531,36 @@ class MP_Stripe_Price_Updater {
     
     public function cleanup_logs() {
         try {
-            // Clean up job reports - keep only last 15 entries
-            $reports = get_option('mpsp_job_reports', array());
-            if (count($reports) > 15) {
-                // Get timestamps of reports being removed to clean up corresponding price update log entries
-                $reports_to_remove = array_slice($reports, 0, count($reports) - 15);
-                $cutoff_times = array();
+            global $wpdb;
+            
+            // Clean up old jobs - keep only last 50 jobs to maintain performance
+            $old_jobs = $wpdb->get_results(
+                "SELECT id FROM {$wpdb->prefix}mpsp_jobs 
+                 ORDER BY started_at DESC 
+                 LIMIT 50, 999999", // Skip first 50, get the rest
+                ARRAY_A
+            );
+            
+            if (!empty($old_jobs)) {
+                $job_ids_to_delete = array_column($old_jobs, 'id');
+                $job_ids_placeholders = implode(',', array_fill(0, count($job_ids_to_delete), '%d'));
                 
-                foreach ($reports_to_remove as $report) {
-                    if (isset($report['started_at'])) {
-                        $cutoff_times[] = $report['started_at'];
-                    }
-                    if (isset($report['completed_at'])) {
-                        $cutoff_times[] = $report['completed_at'];
-                    }
-                }
+                // Delete entries first (foreign key constraint)
+                $wpdb->query($wpdb->prepare(
+                    "DELETE FROM {$wpdb->prefix}mpsp_entries 
+                     WHERE job_id IN ($job_ids_placeholders)",
+                    ...$job_ids_to_delete
+                ));
                 
-                // Find the earliest timestamp from reports being removed
-                if (!empty($cutoff_times)) {
-                    $earliest_cutoff = min($cutoff_times);
-                    
-                    // Clean up price update log entries that correspond to removed job reports
-                    $price_log = get_option('mpsp_price_update_log', array());
-                    $filtered_log = array();
-                    
-                    foreach ($price_log as $entry) {
-                        // Keep entries that are newer than the earliest removed job report
-                        if (isset($entry['updated_at']) && $entry['updated_at'] >= $earliest_cutoff) {
-                            $filtered_log[] = $entry;
-                        }
-                    }
-                    
-                    update_option('mpsp_price_update_log', $filtered_log);
-                }
-                
-                // Keep only the last 15 job reports
-                $reports = array_slice($reports, -15);
-                update_option('mpsp_job_reports', $reports);
+                // Then delete the jobs
+                $wpdb->query($wpdb->prepare(
+                    "DELETE FROM {$wpdb->prefix}mpsp_jobs 
+                     WHERE id IN ($job_ids_placeholders)",
+                    ...$job_ids_to_delete
+                ));
             }
             
-            // Clean up orphaned detailed job logs (in case cleanup failed)
-            global $wpdb;
+            // Clean up orphaned detailed job logs from old options system (legacy cleanup)
             $orphaned_logs = $wpdb->get_results(
                 "SELECT option_name FROM {$wpdb->options} 
                  WHERE option_name LIKE 'mpsp_detailed_job_log_%' 
@@ -1983,13 +2571,67 @@ class MP_Stripe_Price_Updater {
                 delete_option($option->option_name);
             }
             
-            // Clean up any stuck job status older than 1 hour
-            $current_job = get_option('mpsp_current_job', null);
-            if ($current_job && !empty($current_job['started_at'])) {
-                $started_time = strtotime($current_job['started_at']);
-                if ($started_time && (time() - $started_time) > 3600) { // 1 hour
-                    delete_option('mpsp_current_job');
-                    delete_option('mpsp_current_job_id');
+            // Clean up legacy options that are no longer used
+            $legacy_options = array(
+                'mpsp_job_reports',
+                'mpsp_price_update_log'
+            );
+            
+            foreach ($legacy_options as $option_name) {
+                if (get_option($option_name, false) !== false) {
+                    delete_option($option_name);
+                }
+            }
+            
+            // Clean up stuck job status with intelligent timeout calculation
+            global $wpdb;
+            $current_job = $wpdb->get_row(
+                "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1 AND status = 'running'"
+            );
+            if ($current_job && !empty($current_job->started_at)) {
+                $started_time = strtotime($current_job->started_at);
+                if ($started_time) {
+                    // Calculate expected job duration based on total subscriptions
+                    $total_subscriptions = intval($current_job->total_subscriptions ?? 0);
+                    $max_per_cycle = 25;
+                    $cycle_duration = 5 * 60; // 5 minutes in seconds
+                    
+                    // Estimate cycles needed: total subscriptions / max per cycle (rounded up)
+                    $estimated_cycles = ceil($total_subscriptions / $max_per_cycle);
+                    // Double the estimation due to WordPress cron unpredictability
+                    $estimated_duration = $estimated_cycles * $cycle_duration * 2;
+                    
+                    // Add buffer time: 50% extra + minimum 2 hours for safety
+                    $buffer_time = max($estimated_duration * 0.5, 7200); // minimum 2 hours buffer
+                    $timeout_duration = $estimated_duration + $buffer_time;
+                    
+                    // Minimum timeout of 4 hours, maximum of 1 week for sanity
+                    $timeout_duration = max(14400, min($timeout_duration, 604800)); // 4 hours - 1 week
+                    
+                    $elapsed_time = time() - $started_time;
+                    if ($elapsed_time > $timeout_duration) {
+                        // Log the cleanup for debugging
+                        error_log(sprintf(
+                            'MPSP: Cleaning up stuck job after %d hours. Job had %d total subscriptions, estimated %d cycles, timeout was %d hours.',
+                            round($elapsed_time / 3600, 1),
+                            $total_subscriptions,
+                            $estimated_cycles,
+                            round($timeout_duration / 3600, 1)
+                        ));
+                        
+                        // Mark the stuck job as failed in database
+                        $wpdb->update(
+                            $wpdb->prefix . 'mpsp_jobs',
+                            array(
+                                'status' => 'failed',
+                                'completed_at' => current_time('mysql'),
+                                'current_job' => 0
+                            ),
+                            array('id' => $current_job->id),
+                            array('%s', '%s', '%d'),
+                            array('%d')
+                        );
+                    }
                 }
             }
             
@@ -2001,6 +2643,130 @@ class MP_Stripe_Price_Updater {
     public function deactivate() {
         wp_clear_scheduled_hook('mpsp_process_price_updates');
         wp_clear_scheduled_hook('mpsp_cleanup_logs');
+    }
+    
+    public function create_database_tables() {
+        global $wpdb;
+        
+        $charset_collate = $wpdb->get_charset_collate();
+        
+        // Rules table
+        $rules_table = $wpdb->prefix . 'mpsp_rules';
+        $rules_sql = "CREATE TABLE $rules_table (
+            id int(11) NOT NULL AUTO_INCREMENT,
+            name varchar(255) NOT NULL,
+            gateway_id varchar(100) NOT NULL,
+            membership_id int(11) NOT NULL,
+            price_filter_type varchar(20) NOT NULL,
+            min_price decimal(10,2) NULL,
+            max_price decimal(10,2) NULL,
+            specific_price decimal(10,2) NULL,
+            billing_period int(11) NULL,
+            billing_interval varchar(20) NULL,
+            new_price decimal(10,2) NOT NULL,
+            enabled tinyint(1) NOT NULL DEFAULT 1,
+            auto_disabled_at datetime NULL,
+            created_at datetime NOT NULL,
+            updated_at datetime NOT NULL,
+            PRIMARY KEY (id),
+            KEY gateway_id (gateway_id),
+            KEY membership_id (membership_id),
+            KEY enabled (enabled)
+        ) $charset_collate;";
+        
+        // Jobs table
+        $jobs_table = $wpdb->prefix . 'mpsp_jobs';
+        $jobs_sql = "CREATE TABLE $jobs_table (
+            id int(11) NOT NULL AUTO_INCREMENT,
+            rule_id int(11) NOT NULL,
+            status enum('running','completed','cancelled','failed') NOT NULL DEFAULT 'running',
+            total_subscriptions int(11) NOT NULL DEFAULT 0,
+            processed_count int(11) NOT NULL DEFAULT 0,
+            success_count int(11) NOT NULL DEFAULT 0,
+            error_count int(11) NOT NULL DEFAULT 0,
+            started_at datetime NOT NULL,
+            completed_at datetime NULL,
+            last_activity_at datetime NOT NULL,
+            current_job tinyint(1) NOT NULL DEFAULT 0,
+            PRIMARY KEY (id),
+            KEY rule_id (rule_id),
+            KEY status (status),
+            KEY started_at (started_at),
+            KEY current_job (current_job)
+        ) $charset_collate;";
+        
+        // Entries table
+        $entries_table = $wpdb->prefix . 'mpsp_entries';
+        $entries_sql = "CREATE TABLE $entries_table (
+            id int(11) NOT NULL AUTO_INCREMENT,
+            job_id int(11) NOT NULL,
+            subscription_id int(11) NOT NULL,
+            user_id int(11) NOT NULL,
+            old_price decimal(10,2) NOT NULL,
+            new_price decimal(10,2) NOT NULL,
+            status enum('success','error') NOT NULL,
+            stripe_price_id varchar(100) NULL,
+            api_mode enum('test','live') NOT NULL,
+            error_message text NULL,
+            processed_at datetime NOT NULL,
+            PRIMARY KEY (id),
+            KEY job_id (job_id),
+            KEY subscription_id (subscription_id),
+            KEY user_id (user_id),
+            KEY status (status),
+            KEY processed_at (processed_at)
+        ) $charset_collate;";
+        
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($rules_sql);
+        dbDelta($jobs_sql);
+        dbDelta($entries_sql);
+        
+        // Migrate existing data from options table
+        $this->migrate_existing_data();
+        
+        // Update database version to match plugin version
+        update_option('mpsp_db_version', MPSP_VERSION);
+    }
+    
+    private function migrate_existing_data() {
+        global $wpdb;
+        
+        // Check if migration already done
+        if (get_option('mpsp_data_migrated', false)) {
+            return;
+        }
+        
+        // Migrate rules from options to rules table
+        $old_rules = get_option('mpsp_price_update_rules', array());
+        if (!empty($old_rules)) {
+            $rules_table = $wpdb->prefix . 'mpsp_rules';
+            foreach ($old_rules as $rule) {
+                $wpdb->insert(
+                    $rules_table,
+                    array(
+                        'name' => $rule['name'],
+                        'gateway_id' => $rule['gateway_id'],
+                        'membership_id' => $rule['membership_id'],
+                        'price_filter_type' => $rule['price_filter_type'],
+                        'min_price' => $rule['min_price'],
+                        'max_price' => $rule['max_price'],
+                        'specific_price' => $rule['specific_price'],
+                        'billing_period' => $rule['billing_period'],
+                        'billing_interval' => $rule['billing_interval'],
+                        'new_price' => $rule['new_price'],
+                        'enabled' => !empty($rule['enabled']) ? 1 : 0,
+                        'created_at' => $rule['created_at'] ?? current_time('mysql'),
+                        'updated_at' => current_time('mysql')
+                    ),
+                    array('%s', '%s', '%d', '%s', '%f', '%f', '%f', '%d', '%s', '%f', '%d', '%s', '%s')
+                );
+            }
+        }
+        
+        // Mark migration as complete
+        update_option('mpsp_data_migrated', true);
+        
     }
 }
 
