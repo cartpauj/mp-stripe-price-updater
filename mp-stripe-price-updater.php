@@ -45,7 +45,6 @@ class MP_Stripe_Price_Updater {
         add_action('wp_ajax_mpsp_save_rule', array($this, 'ajax_save_rule'));
         add_action('wp_ajax_mpsp_delete_rule', array($this, 'ajax_delete_rule'));
         add_action('wp_ajax_mpsp_enable_rule', array($this, 'ajax_enable_rule'));
-        add_action('wp_ajax_mpsp_process_rule_now', array($this, 'ajax_process_rule_now'));
         add_action('wp_ajax_mpsp_get_job_status', array($this, 'ajax_get_job_status'));
         add_action('wp_ajax_mpsp_cancel_job', array($this, 'ajax_cancel_job'));
         add_action('wp_ajax_mpsp_download_csv_report', array($this, 'ajax_download_csv_report'));
@@ -550,11 +549,6 @@ class MP_Stripe_Price_Updater {
                 enableRule(ruleId);
             });
             
-            // Process rule now buttons
-            $(document).on('click', '.process-rule-now', function() {
-                var ruleId = $(this).data('rule-id');
-                processRuleNow(ruleId);
-            });
             
             // Delete job buttons
             $(document).on('click', '.delete-job', function() {
@@ -637,6 +631,15 @@ class MP_Stripe_Price_Updater {
                     
                     if (response.success) {
                         alert('Rule saved successfully! Price updates will be processed every 5 minutes via cron job.');
+                        
+                        // Show job status bar immediately after saving new rule
+                        $('#mpsp-job-status').show();
+                        $('#job-message').text('Rule created - waiting for cron processing...');
+                        $('#job-progress-bar').css('width', '0%');
+                        $('#job-details').text('Job will start within 5 minutes...');
+                        
+                        // Start polling for job status
+                        startJobStatusPolling();
                         location.reload();
                     } else {
                         alert('Error saving rule: ' + response.data);
@@ -644,37 +647,6 @@ class MP_Stripe_Price_Updater {
                 });
             }
             
-            function processRuleNow(ruleId) {
-                if (!confirm('Process this rule now? This will immediately update all matching subscriptions.')) {
-                    return;
-                }
-                
-                // Check if there's already an active job
-                checkJobStatus(function(hasActiveJob) {
-                    if (hasActiveJob) {
-                        alert('Another processing job is currently running. Please wait for it to complete.');
-                        return;
-                    }
-                    
-                    var button = $('.process-rule-now[data-rule-id="' + ruleId + '"]');
-                    button.addClass('mpsp-processing').text('Starting...');
-                    
-                    $.post(mpsp_ajax.ajax_url, {
-                        action: 'mpsp_process_rule_now',
-                        rule_id: ruleId,
-                        nonce: mpsp_ajax.nonce
-                    }, function(response) {
-                        button.removeClass('mpsp-processing').text('Process Now');
-                        
-                        if (response.success) {
-                            $('#mpsp-job-status').show();
-                            startJobStatusPolling();
-                        } else {
-                            alert('Error starting job: ' + response.data);
-                        }
-                    });
-                });
-            }
             
             function deleteRule(ruleId) {
                 if (!confirm('Are you sure you want to delete this rule? This will also delete all associated jobs and entries.')) {
@@ -702,14 +674,15 @@ class MP_Stripe_Price_Updater {
                     nonce: mpsp_ajax.nonce
                 }, function(response) {
                     if (response.success) {
-                        // Show job status bar immediately
+                        // Show job status bar immediately and start monitoring
                         $('#mpsp-job-status').show();
-                        $('#job-message').text('Rule enabled - starting processing...');
+                        $('#job-message').text('Rule enabled - waiting for cron processing...');
                         $('#job-progress-bar').css('width', '0%');
-                        $('#job-details').text('Initializing job...');
+                        $('#job-details').text('Job will start within 5 minutes...');
                         
-                        // Start processing immediately instead of waiting for cron
-                        processRuleNow(ruleId);
+                        // Start polling for job status immediately
+                        startJobStatusPolling();
+                        location.reload(); // Refresh to show updated rule status
                     } else {
                         alert('Error enabling rule: ' + response.data);
                     }
@@ -1163,44 +1136,6 @@ class MP_Stripe_Price_Updater {
         wp_send_json_success();
     }
     
-    public function ajax_process_rule_now() {
-        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
-            wp_send_json_error('Invalid nonce');
-        }
-        
-        if (!current_user_can('manage_options')) {
-            wp_send_json_error('Insufficient permissions');
-        }
-        
-        // Check if there's already an active job
-        global $wpdb;
-        $active_job = $wpdb->get_row(
-            "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1 AND status = 'running'"
-        );
-        if ($active_job) {
-            wp_send_json_error('Another processing job is currently running');
-        }
-        $rule_id = intval($_POST['rule_id']);
-        
-        if (empty($rule_id)) {
-            wp_send_json_error('Rule ID is required');
-        }
-        
-        $rule = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$wpdb->prefix}mpsp_rules WHERE id = %d",
-            $rule_id
-        ), ARRAY_A);
-        
-        if (!$rule) {
-            wp_send_json_error('Rule not found');
-        }
-        
-        // Get matching subscriptions and start the job
-        $matching_subscriptions = $this->get_matching_subscriptions($rule);
-        $this->start_new_job($rule, $matching_subscriptions);
-        
-        wp_send_json_success(array('message' => 'Job started successfully'));
-    }
     
     public function ajax_get_job_status() {
         if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
@@ -1698,7 +1633,10 @@ class MP_Stripe_Price_Updater {
         // Check if job is complete
         if (empty($remaining_subscriptions)) {
             // Job is complete - all subscriptions have been processed
-            $this->complete_job($rule, null, $existing_job['processed_count'], $existing_job['error_count'], array());
+            $this->complete_job($existing_job['id'], $rule);
+            
+            // Auto-disable the rule since it has no more subscriptions to process
+            $this->check_and_auto_disable_rule($rule);
             return;
         }
         
@@ -1861,12 +1799,26 @@ class MP_Stripe_Price_Updater {
         }
         
         // Complete the job
-        $this->complete_job($job_id, $rule, $success_count, $error_count);
+        $this->complete_job($job_id, $rule);
+        
+        // Auto-disable the rule since it has no more subscriptions to process
+        $this->check_and_auto_disable_rule($rule);
     }
     
-    private function complete_job($rule, $rule_index, $processed_count, $error_count, $errors) {
+    private function complete_job($job_id, $rule) {
         try {
             global $wpdb;
+            
+            // Get the current job data
+            $current_job = $wpdb->get_row($wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d",
+                $job_id
+            ), ARRAY_A);
+            
+            if (!$current_job) {
+                error_log('MPSP: Job not found for completion: ' . $job_id);
+                return;
+            }
             
             // Update rule stats in database
             if (!empty($rule['id'])) {
@@ -1881,37 +1833,25 @@ class MP_Stripe_Price_Updater {
                 );
             }
             
-            // Get current job from database
-            $current_job = $wpdb->get_row($wpdb->prepare(
-                "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1 LIMIT 1"
-            ), ARRAY_A);
+            $was_cancelled = ($current_job['status'] === 'cancelled');
+            $final_status = $was_cancelled ? 'cancelled' : 'completed';
             
-            if ($current_job) {
-                $was_cancelled = ($current_job['status'] === 'cancelled');
-                $final_status = $was_cancelled ? 'cancelled' : ($error_count > 0 ? 'completed' : 'completed');
-                
-                // Update job completion in database
-                $wpdb->update(
-                    $wpdb->prefix . 'mpsp_jobs',
-                    array(
-                        'status' => $final_status,
-                        'processed_count' => $processed_count,
-                        'error_count' => $error_count,
-                        'success_count' => $processed_count - $error_count,
-                        'completed_at' => current_time('mysql'),
-                        'current_job' => 0
-                    ),
-                    array('id' => $current_job['id']),
-                    array('%s', '%d', '%d', '%d', '%s', '%d'),
-                    array('%d')
-                );
-            }
+            // Update job completion in database
+            $wpdb->update(
+                $wpdb->prefix . 'mpsp_jobs',
+                array(
+                    'status' => $final_status,
+                    'completed_at' => current_time('mysql'),
+                    'current_job' => 0
+                ),
+                array('id' => $current_job['id']),
+                array('%s', '%s', '%d'),
+                array('%d')
+            );
             
             // Generate job report and send admin email notification
-            if ($current_job) {
-                $job_report = $this->generate_job_report($current_job);
-                $this->send_completion_email($rule, $processed_count, $error_count, $errors, $was_cancelled ?? false, $job_report);
-            }
+            $job_report = $this->generate_job_report($current_job);
+            $this->send_completion_email($rule, $current_job['processed_count'], $current_job['error_count'], array(), $was_cancelled, $job_report);
         } catch (Exception $e) {
             error_log('Error completing job: ' . $e->getMessage());
             // Ensure job status is cleared even if completion fails
@@ -2303,9 +2243,7 @@ class MP_Stripe_Price_Updater {
                             ?>
                         </td>
                         <td class="mpsp-rule-actions">
-                            <?php if (!empty($rule['enabled'])): ?>
-                                <button class="button button-small process-rule-now" data-rule-id="<?php echo $rule['id']; ?>">Process Now</button>
-                            <?php else: ?>
+                            <?php if (empty($rule['enabled'])): ?>
                                 <button class="button button-small enable-rule" data-rule-id="<?php echo $rule['id']; ?>">Enable</button>
                             <?php endif; ?>
                             <button class="button button-small delete-rule" data-rule-id="<?php echo $rule['id']; ?>">Delete</button>
