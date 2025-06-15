@@ -40,6 +40,7 @@ class MP_Stripe_Price_Updater {
         add_action('wp_ajax_mpsp_preview_subscriptions', array($this, 'ajax_preview_subscriptions'));
         add_action('wp_ajax_mpsp_save_rule', array($this, 'ajax_save_rule'));
         add_action('wp_ajax_mpsp_delete_rule', array($this, 'ajax_delete_rule'));
+        add_action('wp_ajax_mpsp_enable_rule', array($this, 'ajax_enable_rule'));
         add_action('wp_ajax_mpsp_process_rule_now', array($this, 'ajax_process_rule_now'));
         add_action('wp_ajax_mpsp_get_job_status', array($this, 'ajax_get_job_status'));
         add_action('wp_ajax_mpsp_cancel_job', array($this, 'ajax_cancel_job'));
@@ -386,6 +387,12 @@ class MP_Stripe_Price_Updater {
                 }
             });
             
+            // Enable rule buttons
+            $(document).on('click', '.enable-rule', function() {
+                var ruleIndex = $(this).data('index');
+                enableRule(ruleIndex);
+            });
+            
             // Cancel job button
             $('#cancel-job-button').on('click', function() {
                 if (confirm('Are you sure you want to cancel the current processing job?')) {
@@ -499,6 +506,20 @@ class MP_Stripe_Price_Updater {
                         location.reload();
                     } else {
                         alert('Error deleting rule: ' + response.data);
+                    }
+                });
+            }
+            
+            function enableRule(ruleIndex) {
+                $.post(mpsp_ajax.ajax_url, {
+                    action: 'mpsp_enable_rule',
+                    rule_index: ruleIndex,
+                    nonce: mpsp_ajax.nonce
+                }, function(response) {
+                    if (response.success) {
+                        location.reload();
+                    } else {
+                        alert('Error enabling rule: ' + response.data);
                     }
                 });
             }
@@ -762,6 +783,28 @@ class MP_Stripe_Price_Updater {
         wp_send_json_success();
     }
     
+    public function ajax_enable_rule() {
+        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+            wp_send_json_error('Invalid nonce');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+        }
+        
+        $rule_index = intval($_POST['rule_index']);
+        $rules = get_option('mpsp_price_update_rules', array());
+        
+        if (isset($rules[$rule_index])) {
+            $rules[$rule_index]['enabled'] = true;
+            // Remove auto-disabled timestamp when manually re-enabled
+            unset($rules[$rule_index]['auto_disabled_at']);
+            update_option('mpsp_price_update_rules', $rules);
+        }
+        
+        wp_send_json_success();
+    }
+    
     public function ajax_process_rule_now() {
         if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
             wp_send_json_error('Invalid nonce');
@@ -902,6 +945,11 @@ class MP_Stripe_Price_Updater {
         foreach ($results as $row) {
             $subscription = new MeprSubscription($row->id);
             
+            // Skip subscriptions that already have the target price
+            if (isset($criteria['new_price']) && abs($subscription->price - floatval($criteria['new_price'])) < 0.01) {
+                continue;
+            }
+            
             // Price filter
             if (!$this->matches_price_criteria($subscription->price, $criteria)) {
                 continue;
@@ -969,22 +1017,42 @@ class MP_Stripe_Price_Updater {
             return; // No rules to process
         }
         
-        // Find the first enabled rule and process it
+        // Find the first enabled rule that has work to do
+        $rules_updated = false;
         foreach ($rules as $index => $rule) {
             if (!empty($rule['enabled'])) {
                 try {
-                    $this->start_background_job($rule, $index);
-                    break; // Only process one rule at a time
+                    // Check if this rule has any matching subscriptions before starting a job
+                    $matching_subscriptions = $this->get_matching_subscriptions($rule);
+                    if (count($matching_subscriptions) > 0) {
+                        $this->start_background_job($rule, $index, $matching_subscriptions);
+                        break; // Only process one rule at a time
+                    } else {
+                        // If rule has processed subscriptions before but now has no matches, 
+                        // it may have completed its work - disable it to prevent future runs
+                        if (!empty($rule['processed_count']) && $rule['processed_count'] > 0) {
+                            $rules[$index]['enabled'] = false;
+                            $rules[$index]['auto_disabled_at'] = current_time('mysql');
+                            $rules_updated = true;
+                        }
+                    }
                 } catch (Exception $e) {
                     error_log('MemberPress Stripe Price Updater cron error: ' . $e->getMessage());
                 }
             }
         }
+        
+        // Save updated rules if any were auto-disabled
+        if ($rules_updated) {
+            update_option('mpsp_price_update_rules', $rules);
+        }
     }
     
-    private function start_background_job($rule, $rule_index) {
-        // Get matching subscriptions to determine if there's work to do
-        $matching_subscriptions = $this->get_matching_subscriptions($rule);
+    private function start_background_job($rule, $rule_index, $matching_subscriptions = null) {
+        // Get matching subscriptions if not already provided (for manual processing)
+        if ($matching_subscriptions === null) {
+            $matching_subscriptions = $this->get_matching_subscriptions($rule);
+        }
         $total_subscriptions = count($matching_subscriptions);
         
         // If no subscriptions match, don't start a job or send notifications
@@ -1480,6 +1548,7 @@ class MP_Stripe_Price_Updater {
             <thead>
                 <tr>
                     <th>Rule Name</th>
+                    <th>Status</th>
                     <th>Gateway</th>
                     <th>Membership</th>
                     <th>Price Filter</th>
@@ -1495,6 +1564,16 @@ class MP_Stripe_Price_Updater {
                 <?php foreach ($rules as $index => $rule): ?>
                 <tr>
                     <td><?php echo esc_html($rule['name']); ?></td>
+                    <td>
+                        <?php if (empty($rule['enabled'])): ?>
+                            <span style="color: red;">Disabled</span>
+                            <?php if (!empty($rule['auto_disabled_at'])): ?>
+                                <br><small>Auto-disabled: <?php echo esc_html(date('Y-m-d H:i', strtotime($rule['auto_disabled_at']))); ?></small>
+                            <?php endif; ?>
+                        <?php else: ?>
+                            <span style="color: green;">Active</span>
+                        <?php endif; ?>
+                    </td>
                     <td><?php echo esc_html($this->get_gateway_label($rule['gateway_id'])); ?></td>
                     <td><?php echo esc_html(get_the_title($rule['membership_id'])); ?></td>
                     <td>
@@ -1520,7 +1599,11 @@ class MP_Stripe_Price_Updater {
                     <td><?php echo $rule['last_processed'] ? esc_html(date('Y-m-d H:i', strtotime($rule['last_processed']))) : 'Never'; ?></td>
                     <td><?php echo intval($rule['processed_count'] ?? 0); ?></td>
                     <td class="mpsp-rule-actions">
-                        <button class="button button-small process-rule-now" data-index="<?php echo $index; ?>">Process Now</button>
+                        <?php if (!empty($rule['enabled'])): ?>
+                            <button class="button button-small process-rule-now" data-index="<?php echo $index; ?>">Process Now</button>
+                        <?php else: ?>
+                            <button class="button button-small enable-rule" data-index="<?php echo $index; ?>">Enable</button>
+                        <?php endif; ?>
                         <button class="button button-small delete-rule" data-index="<?php echo $index; ?>">Delete</button>
                     </td>
                 </tr>

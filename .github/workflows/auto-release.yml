@@ -1,0 +1,181 @@
+name: Auto Release Plugin
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mp-stripe-price-updater.php'
+      - 'LICENSE'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    # Skip if commit message contains [ci skip] or [skip ci]
+    if: "!contains(github.event.head_commit.message, '[ci skip]') && !contains(github.event.head_commit.message, '[skip ci]')"
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract version from plugin file
+      id: version
+      run: |
+        if [ -f "mp-stripe-price-updater.php" ]; then
+          VERSION=$(grep -E "^\s*\*\s*Version:\s*" mp-stripe-price-updater.php | sed -E 's/^\s*\*\s*Version:\s*([0-9]+\.[0-9]+\.[0-9]+).*$/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "Error: Could not extract version from mp-stripe-price-updater.php"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Found version: $VERSION"
+        else
+          echo "Error: mp-stripe-price-updater.php not found"
+          exit 1
+        fi
+    
+    - name: Check if LICENSE file exists
+      run: |
+        if [ ! -f "LICENSE" ]; then
+          echo "Warning: LICENSE file not found, creating a basic GPL v2 license"
+          cat > LICENSE << 'EOF'
+        GNU GENERAL PUBLIC LICENSE
+        Version 2, June 1991
+
+        Copyright (C) 1989, 1991 Free Software Foundation, Inc.,
+        51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+        Everyone is permitted to copy and distribute verbatim copies
+        of this license document, but changing it is not allowed.
+
+        This program is free software; you can redistribute it and/or modify
+        it under the terms of the GNU General Public License as published by
+        the Free Software Foundation; either version 2 of the License, or
+        (at your option) any later version.
+
+        This program is distributed in the hope that it will be useful,
+        but WITHOUT ANY WARRANTY; without even the implied warranty of
+        MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+        GNU General Public License for more details.
+
+        You should have received a copy of the GNU General Public License along
+        with this program; if not, write to the Free Software Foundation, Inc.,
+        51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+        EOF
+        fi
+    
+    - name: Create plugin directory structure
+      run: |
+        mkdir -p mp-stripe-price-updater
+        cp mp-stripe-price-updater.php mp-stripe-price-updater/
+        cp LICENSE mp-stripe-price-updater/
+    
+    - name: Create release zip
+      run: |
+        ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
+        zip -r "$ZIP_NAME" mp-stripe-price-updater/
+        echo "Created: $ZIP_NAME"
+        ls -la "$ZIP_NAME"
+    
+    - name: Check if zip already exists in repo
+      id: check_zip
+      run: |
+        ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
+        if [ -f "$ZIP_NAME" ]; then
+          echo "ZIP_EXISTS=true" >> $GITHUB_OUTPUT
+          echo "Zip file already exists, skipping commit"
+        else
+          echo "ZIP_EXISTS=false" >> $GITHUB_OUTPUT
+          echo "Zip file does not exist, will create"
+        fi
+    
+    - name: Commit and push release zip
+      if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
+      run: |
+        ZIP_NAME="mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip"
+        
+        # Configure git
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # Add the zip file
+        git add "$ZIP_NAME"
+        
+        # Check if there are changes to commit
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          # Commit with CI skip flag
+          git commit -m "Auto-release: Add $ZIP_NAME [ci skip]
+
+          Generated from commit: ${{ github.sha }}
+          Plugin version: ${{ steps.version.outputs.VERSION }}
+          
+          This zip contains:
+          - mp-stripe-price-updater.php (main plugin file)
+          - LICENSE (GPL v2 license)
+          
+          Ready for WordPress plugin installation."
+          
+          # Push the changes
+          git push
+          echo "Successfully committed and pushed $ZIP_NAME"
+        fi
+    
+    - name: Create GitHub Release
+      if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.version.outputs.VERSION }}
+        release_name: MemberPress Stripe Price Updater v${{ steps.version.outputs.VERSION }}
+        body: |
+          ## MemberPress Stripe Price Updater v${{ steps.version.outputs.VERSION }}
+          
+          ### Installation
+          1. Download the `mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip` file
+          2. In WordPress admin, go to Plugins → Add New → Upload Plugin
+          3. Choose the downloaded zip file and click "Install Now"
+          4. Activate the plugin
+          5. Navigate to MemberPress → Stripe Price Updater to configure
+          
+          ### What's Included
+          - `mp-stripe-price-updater.php` - Main plugin file
+          - `LICENSE` - GPL v2 license file
+          
+          ### Requirements
+          - WordPress 5.0+
+          - MemberPress with configured Stripe gateways
+          - PHP 7.4+
+          
+          **Generated from commit:** ${{ github.sha }}
+        draft: false
+        prerelease: false
+    
+    - name: Upload Release Asset
+      if: steps.check_zip.outputs.ZIP_EXISTS == 'false'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip
+        asset_name: mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip
+        asset_content_type: application/zip
+    
+    - name: Clean up temporary files
+      run: |
+        rm -rf mp-stripe-price-updater/
+        echo "Cleanup completed"
+    
+    - name: Summary
+      run: |
+        echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version:** ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Zip File:** mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status:** $([ '${{ steps.check_zip.outputs.ZIP_EXISTS }}' = 'false' ] && echo 'Created new release' || echo 'Zip already exists, skipped')" >> $GITHUB_STEP_SUMMARY

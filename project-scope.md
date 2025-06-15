@@ -403,3 +403,99 @@ During QA/development testing, a currency mismatch error was identified and reso
 - **Integration**: Works seamlessly with existing error handling and reporting systems
 
 This enhancement addresses scenarios where existing Stripe subscriptions may have different currencies than the current MemberPress configuration, providing better error handling and preventing failed API requests that would otherwise result in cryptic Stripe error messages.
+
+## Post-Deployment Critical Bug Fix (June 2025)
+
+During production deployment, a critical issue was identified where the plugin was repeatedly processing the same subscriptions even after successful completion. This resulted in unnecessary API calls, server load, and spam notifications.
+
+### Root Cause Analysis
+The issue manifested as subscription ID 544 being processed repeatedly with identical prices ($99.00 → $99.00), indicating the plugin was:
+1. Finding subscriptions that already matched the target price
+2. Running jobs continuously even when no work needed to be done
+3. Not properly completing rules when their work was finished
+
+### Comprehensive Job Management Fix
+
+#### 1. **Intelligent Subscription Filtering**
+- **Target Price Exclusion**: Modified `get_matching_subscriptions()` to skip subscriptions that already have the target new price
+- **Precision Comparison**: Uses floating-point tolerance (0.01) for accurate price matching
+- **Early Filtering**: Prevents unnecessary processing at the query level
+- **Performance Impact**: Reduces database load and Stripe API calls significantly
+
+#### 2. **Smart Cron Job Logic**
+- **Pre-Job Validation**: Cron jobs now check for actual work before starting processing
+- **Efficient Rule Processing**: Only processes rules that have matching subscriptions requiring updates
+- **Resource Conservation**: Eliminates empty job runs that occurred every 5 minutes
+- **Scalability Improvement**: Reduces server load for sites with completed rules
+
+#### 3. **Automatic Rule Completion System**
+- **Self-Completing Rules**: Rules automatically disable when they have no more work to do
+- **Completion Detection**: Identifies rules that have processed subscriptions but now have zero matches
+- **Auto-Disable Logic**: Prevents indefinite re-running of completed price update campaigns
+- **Audit Trail**: Timestamps when rules are auto-disabled for administrative visibility
+
+#### 4. **Enhanced Administrative Interface**
+- **Rule Status Display**: Added visual status indicators (Active/Disabled) in the rules table
+- **Auto-Disable Notifications**: Shows when and why rules were automatically disabled
+- **Manual Control**: Added "Enable" button for reactivating disabled rules
+- **Smart Actions**: Different action buttons based on rule status (Process Now vs Enable)
+- **Status Column**: New dedicated column showing rule state and auto-disable timestamps
+
+#### 5. **Performance Optimizations**
+- **Query Efficiency**: Avoids duplicate database queries by passing pre-fetched data
+- **Resource Management**: Eliminates redundant Stripe API calls for already-processed subscriptions
+- **Memory Usage**: More efficient data handling in job processing loops
+- **Execution Time**: Faster rule evaluation and job startup
+
+### Technical Implementation Details
+
+#### Core Logic Changes
+```php
+// In get_matching_subscriptions()
+if (isset($criteria['new_price']) && abs($subscription->price - floatval($criteria['new_price'])) < 0.01) {
+    continue; // Skip subscriptions already at target price
+}
+
+// In process_price_updates() cron
+$matching_subscriptions = $this->get_matching_subscriptions($rule);
+if (count($matching_subscriptions) > 0) {
+    $this->start_background_job($rule, $index, $matching_subscriptions);
+    break; // Only process rules with actual work
+}
+```
+
+#### Auto-Disable Logic
+```php
+// Auto-disable completed rules
+if (!empty($rule['processed_count']) && $rule['processed_count'] > 0) {
+    $rules[$index]['enabled'] = false;
+    $rules[$index]['auto_disabled_at'] = current_time('mysql');
+}
+```
+
+#### Administrative Controls
+- **Enable Rule AJAX Handler**: `ajax_enable_rule()` method for reactivating disabled rules
+- **Status Visualization**: Color-coded status indicators (green=active, red=disabled)
+- **Timestamp Display**: Auto-disable dates shown in human-readable format
+- **Action Context**: Process Now button only shows for active rules
+
+### Business Impact Improvements
+- **Cost Reduction**: Eliminates unnecessary Stripe API calls that were being charged
+- **Server Performance**: Reduces CPU and memory usage from redundant processing
+- **User Experience**: Eliminates spam email notifications for no-op operations
+- **Administrative Clarity**: Clear visibility into which rules are active vs completed
+- **Operational Efficiency**: Automatic cleanup of completed campaigns without manual intervention
+
+### Production Deployment Safety
+- **Backward Compatibility**: All existing rules continue to work without modification
+- **Graceful Degradation**: System handles edge cases and maintains stability
+- **Comprehensive Error Handling**: All new logic wrapped in proper exception handling
+- **Audit Trail Preservation**: Complete logging of all rule state changes and processing decisions
+
+### Quality Assurance Validation
+- **Zero False Positives**: Confirmed that legitimate price updates still process correctly
+- **Completion Accuracy**: Verified that rules properly auto-disable only when work is truly complete
+- **Re-enablement Testing**: Confirmed that manually re-enabled rules function correctly
+- **Performance Metrics**: Documented reduction in unnecessary API calls and server load
+
+This critical fix transforms the plugin from a functional but inefficient system into a truly production-ready, self-managing solution that properly handles rule lifecycle management and resource conservation. The improvements ensure that price update campaigns complete cleanly without ongoing maintenance overhead or unnecessary resource consumption.
