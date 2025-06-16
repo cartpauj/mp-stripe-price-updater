@@ -1107,7 +1107,7 @@ class MP_Stripe_Price_Updater {
                             location.reload(); // Refresh to show updated logs
                         }
                     });
-                }, 180000); // Poll every 3 minutes
+                }, 15000); // Poll every 15 seconds
             }
             
             function updateJobDisplay(jobData) {
