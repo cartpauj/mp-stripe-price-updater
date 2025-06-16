@@ -755,7 +755,7 @@ class MP_Stripe_Price_Updater {
                 var form = $('<form method="post" action="' + mpsp_ajax.ajax_url + '">');
                 form.append('<input type="hidden" name="action" value="mpsp_export_matching_subscriptions">');
                 form.append('<input type="hidden" name="nonce" value="' + mpsp_ajax.nonce + '">');
-                form.append('<input type="hidden" name="form_data" value="' + JSON.stringify(formData) + '">');
+                form.append($('<input type="hidden" name="form_data">').attr('value', JSON.stringify(formData)));
                 $('body').append(form);
                 form.submit();
                 form.remove();
