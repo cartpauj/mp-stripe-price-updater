@@ -1604,6 +1604,15 @@ class MP_Stripe_Price_Updater {
         
         global $wpdb;
         
+        // Get the current job to find its rule_id
+        $current_job = $wpdb->get_row(
+            "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1 AND status = 'running'"
+        );
+        
+        if (!$current_job) {
+            wp_send_json_error('No active job found to cancel');
+        }
+        
         // Mark current job as cancelled in database
         $updated = $wpdb->update(
             $wpdb->prefix . 'mpsp_jobs',
@@ -1612,15 +1621,27 @@ class MP_Stripe_Price_Updater {
                 'completed_at' => current_time('mysql'),
                 'current_job' => 0
             ),
-            array('current_job' => 1),
+            array('id' => $current_job->id),
             array('%s', '%s', '%d'),
             array('%d')
         );
         
         if ($updated) {
-            wp_send_json_success(array('message' => 'Job cancelled successfully'));
+            // Disable the associated rule to prevent new jobs
+            $wpdb->update(
+                $wpdb->prefix . 'mpsp_rules',
+                array(
+                    'enabled' => 0,
+                    'updated_at' => current_time('mysql')
+                ),
+                array('id' => $current_job->rule_id),
+                array('%d', '%s'),
+                array('%d')
+            );
+            
+            wp_send_json_success(array('message' => 'Job cancelled and rule disabled successfully'));
         } else {
-            wp_send_json_error('No active job found to cancel');
+            wp_send_json_error('Failed to cancel job');
         }
     }
     
