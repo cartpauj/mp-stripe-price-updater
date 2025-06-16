@@ -1207,12 +1207,17 @@ class MP_Stripe_Price_Updater {
         $sample_size = 15; // Show first 15 as sample
         $sample_subscriptions = array_slice($matching_subscriptions, 0, $sample_size);
         
-        $html = '<p><strong>Found ' . $total_count . ' matching subscription(s)</strong></p>';
-        $html .= '<p><strong>New price will be: ' . esc_html(MeprAppHelper::format_currency($form_data['new_price'])) . '</strong></p>';
+        $html = '<div style="background: #e7f3ff; border: 1px solid #b3d9ff; padding: 15px; margin-bottom: 15px; border-radius: 4px;">';
+        $html .= '<p><strong>🔍 Preview Results: Found ' . $total_count . ' matching subscription(s)</strong></p>';
+        $html .= '<p><strong>💰 New price will be: ' . esc_html(MeprAppHelper::format_currency($form_data['new_price'])) . '</strong></p>';
         
         if ($total_count > $sample_size) {
-            $html .= '<p><em>Showing first ' . $sample_size . ' subscriptions as a sample:</em></p>';
+            $html .= '<p style="color: #d63384; font-weight: bold;">⚠️ PREVIEW ONLY: Showing first ' . $sample_size . ' of ' . $total_count . ' total subscriptions</p>';
+            $html .= '<p><em>Use "Export Matching Subscriptions CSV" button below to see all ' . $total_count . ' subscriptions that will be affected.</em></p>';
+        } else {
+            $html .= '<p style="color: #198754; font-weight: bold;">✅ Showing all ' . $total_count . ' matching subscriptions</p>';
         }
+        $html .= '</div>';
         
         $html .= '<table style="width:100%; border-collapse: collapse;" border="1">';
         $html .= '<thead><tr style="background: #f0f0f0;"><th>User</th><th>Email</th><th>Current Price</th><th>Billing Cycle</th><th>Stripe ID</th><th>Status</th></tr></thead>';
@@ -1235,7 +1240,10 @@ class MP_Stripe_Price_Updater {
         $html .= '</tbody></table>';
         
         if ($total_count > $sample_size) {
-            $html .= '<p><em>Use "Export Matching Subscriptions CSV" button to download the complete list of all ' . $total_count . ' subscriptions.</em></p>';
+            $html .= '<div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; margin-top: 15px; border-radius: 4px;">';
+            $html .= '<p style="margin: 0; font-weight: bold; color: #856404;">📊 Complete Data Available</p>';
+            $html .= '<p style="margin: 5px 0 0 0;"><em>Click "Export Matching Subscriptions CSV" button to download all ' . $total_count . ' subscriptions with complete details.</em></p>';
+            $html .= '</div>';
         }
         
         wp_send_json_success($html);
@@ -3074,12 +3082,6 @@ class MP_Stripe_Price_Updater {
                                     data-job-id="<?php echo esc_attr($job['id']); ?>">
                                 View Log
                             </button>
-                            <?php if ($job['status'] === 'completed' && $job['processed_count'] > 0): ?>
-                            <button class="button button-small download-csv-report" 
-                                    data-job-id="<?php echo esc_attr($job['id']); ?>">
-                                Download CSV
-                            </button>
-                            <?php endif; ?>
                             <button class="button button-small delete-job" 
                                     data-job-id="<?php echo esc_attr($job['id']); ?>">
                                 Delete
@@ -3093,39 +3095,6 @@ class MP_Stripe_Price_Updater {
         
         <script>
         jQuery(document).ready(function($) {
-            // Download CSV report buttons
-            $(document).on('click', '.download-csv-report', function() {
-                var jobId = $(this).data('job-id');
-                
-                if (!jobId) {
-                    alert('Job ID not found');
-                    return;
-                }
-                
-                // Create a temporary form to submit the download request
-                var form = $('<form>', {
-                    'method': 'POST',
-                    'action': mpsp_ajax.ajax_url,
-                    'target': '_blank'
-                }).append($('<input>', {
-                    'type': 'hidden',
-                    'name': 'action',
-                    'value': 'mpsp_download_csv_report'
-                })).append($('<input>', {
-                    'type': 'hidden',
-                    'name': 'job_id',
-                    'value': jobId
-                })).append($('<input>', {
-                    'type': 'hidden',
-                    'name': 'nonce',
-                    'value': mpsp_ajax.nonce
-                }));
-                
-                $('body').append(form);
-                form.submit();
-                form.remove();
-            });
-            
             // View job log buttons
             $(document).on('click', '.view-job-log', function() {
                 var jobId = $(this).data('job-id');
