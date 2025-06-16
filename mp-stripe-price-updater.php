@@ -1822,7 +1822,7 @@ class MP_Stripe_Price_Updater {
         $gateway_string = $criteria['gateway_id'];
         
         $query = "
-            SELECT s.*, u.display_name, u.user_email
+            SELECT s.*, u.ID as user_id, u.display_name, u.user_email
             FROM {$wpdb->prefix}mepr_subscriptions s
             INNER JOIN {$wpdb->users} u ON s.user_id = u.ID
             WHERE s.gateway = %s
@@ -1854,6 +1854,7 @@ class MP_Stripe_Price_Updater {
             $matching[] = array(
                 'subscription' => $subscription,
                 'user' => (object)array(
+                    'ID' => $row->user_id,
                     'display_name' => $row->display_name,
                     'user_email' => $row->user_email
                 )
