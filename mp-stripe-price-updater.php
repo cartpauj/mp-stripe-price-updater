@@ -585,18 +585,20 @@ class MP_Stripe_Price_Updater {
         <script>
         jQuery(document).ready(function($) {
             
-            // Check for active job on page load
-            checkJobStatus();
-            
             // Check if we should start processing a newly saved rule
             var ruleIdToProcess = sessionStorage.getItem('mpsp_start_processing_rule_id');
             if (ruleIdToProcess) {
                 sessionStorage.removeItem('mpsp_start_processing_rule_id');
+                // Start processing immediately, don't check for existing jobs first
                 startRuleProcessing(ruleIdToProcess);
+            } else {
+                // Only check for active jobs if we're not starting new processing
+                checkJobStatus();
             }
             
             // Set up polling for job status if there's an active job
             var jobStatusInterval;
+            var showingCompletedJob = false; // Flag to prevent hiding completed job UI
             
             // Gateway selection handler
             $('#mpsp_gateway_id').on('change', function() {
@@ -952,7 +954,10 @@ class MP_Stripe_Price_Updater {
                         }
                         if (callback) callback(true);
                     } else {
-                        $('#mpsp-job-status').hide();
+                        // Don't hide UI if we're showing a completed job
+                        if (!showingCompletedJob) {
+                            $('#mpsp-job-status').hide();
+                        }
                         if (jobStatusInterval) {
                             clearInterval(jobStatusInterval);
                             jobStatusInterval = null;
@@ -1022,6 +1027,9 @@ class MP_Stripe_Price_Updater {
                             // Hide cancel button and show completion styling
                             $('#cancel-job-button').hide();
                             $('#job-progress-bar').addClass('mpsp-progress-complete');
+                            
+                            // Set flag to prevent UI from being hidden
+                            showingCompletedJob = true;
                         } else {
                             // Start monitoring job progress
                             startJobStatusPolling();
