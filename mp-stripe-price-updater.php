@@ -817,7 +817,7 @@ class MP_Stripe_Price_Updater {
                         var entries = response.data;
                         var modalHtml = '<div id="job-entries-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100000; display: flex; align-items: center; justify-content: center;">' +
                             '<div style="background: white; padding: 20px; border-radius: 5px; max-width: 95%; max-height: 90%; overflow: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); position: relative;">' +
-                            '<button onclick="closeJobEntriesModal()" style="position: absolute; top: 10px; right: 15px; background: none; border: none; font-size: 20px; cursor: pointer; color: #666;">&times;</button>' +
+                            '<button class="close-modal-btn" style="position: absolute; top: 10px; right: 15px; background: none; border: none; font-size: 20px; cursor: pointer; color: #666;">&times;</button>' +
                             '<h3 style="margin-top: 0; padding-right: 30px;">Job Entries - Job ID: ' + jobId + '</h3>' +
                             '<div class="mpsp-table-container" style="max-height: 70vh; overflow-y: auto;">' +
                             '<table class="wp-list-table widefat fixed striped mpsp-log-table">' +
@@ -848,6 +848,11 @@ class MP_Stripe_Price_Updater {
                             '</div></div></div>';
                         
                         $('body').append(modalHtml);
+                        
+                        // Add event handler for close button
+                        $('.close-modal-btn').on('click', function() {
+                            closeJobEntriesModal();
+                        });
                     } else {
                         alert('Error loading job entries: ' + response.data);
                     }
@@ -2045,9 +2050,7 @@ class MP_Stripe_Price_Updater {
         if (empty($remaining_subscriptions)) {
             // Job is complete - all subscriptions have been processed
             $this->complete_job($existing_job['id'], $rule);
-            
-            // Auto-disable the rule since it has no more subscriptions to process
-            $this->check_and_auto_disable_rule($rule);
+            // Note: Auto-disable check is now done in complete_job() after status update
             return;
         }
         
@@ -2212,8 +2215,7 @@ class MP_Stripe_Price_Updater {
         // Complete the job
         $this->complete_job($job_id, $rule);
         
-        // Auto-disable the rule since it has no more subscriptions to process
-        $this->check_and_auto_disable_rule($rule);
+        // Note: Auto-disable check is now done in complete_job() after status update
     }
     
     private function complete_job($job_id, $rule) {
@@ -2263,6 +2265,9 @@ class MP_Stripe_Price_Updater {
             // Generate job report and send admin email notification
             $job_report = $this->generate_job_report($current_job);
             $this->send_completion_email($rule, $current_job['processed_count'], $current_job['error_count'], array(), $was_cancelled, $job_report);
+            
+            // Auto-disable the rule if it has no more work to do (now that job is marked completed)
+            $this->check_and_auto_disable_rule($rule);
         } catch (Exception $e) {
             error_log('Error completing job: ' . $e->getMessage());
             // Ensure job status is cleared even if completion fails
