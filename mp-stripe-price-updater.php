@@ -1337,7 +1337,6 @@ class MP_Stripe_Price_Updater {
         foreach ($matching_subscriptions as $sub_data) {
             $sub = $sub_data['subscription'];
             $user = $sub_data['user'];
-            $gateway = $sub_data['gateway'];
             
             fputcsv($output, array(
                 $user->display_name,
@@ -1350,7 +1349,7 @@ class MP_Stripe_Price_Updater {
                 get_option('mepr_currency_code', 'USD'),
                 $sub->period . ' ' . $sub->period_type,
                 ucfirst($sub->status),
-                !empty($gateway->label) ? $gateway->label : 'Stripe Gateway',
+                sprintf('Stripe Gateway (%s)', sanitize_text_field($form_data['gateway_id'] ?? 'unknown')),
                 $sub->created_at
             ));
         }
