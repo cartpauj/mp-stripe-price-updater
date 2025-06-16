@@ -1005,6 +1005,7 @@ class MP_Stripe_Price_Updater {
                     rule_id: ruleId,
                     nonce: mpsp_ajax.nonce
                 }, function(response) {
+                    console.log('MPSP: Start processing response:', response);
                     if (response.success) {
                         if (response.data.completed) {
                             // Job completed immediately, show completion message and refresh page
@@ -1021,11 +1022,12 @@ class MP_Stripe_Price_Updater {
                         }
                     } else {
                         $('#mpsp-job-status').hide();
-                        alert('Error starting processing: ' + response.data);
+                        alert('Error starting processing: ' + (response.data || 'Unknown error'));
                     }
-                }).fail(function() {
+                }).fail(function(xhr, status, error) {
+                    console.error('MPSP: AJAX request failed:', xhr, status, error);
                     $('#mpsp-job-status').hide();
-                    alert('Failed to start processing. Please try again.');
+                    alert('Failed to start processing: ' + error + '. Check console for details.');
                 });
             }
             
@@ -1540,8 +1542,10 @@ class MP_Stripe_Price_Updater {
     }
     
     public function ajax_start_rule_processing() {
+        error_log('MPSP: ajax_start_rule_processing called');
         try {
             if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+                error_log('MPSP: Nonce check failed');
                 wp_send_json_error('Invalid nonce');
             }
             
@@ -1550,7 +1554,9 @@ class MP_Stripe_Price_Updater {
             }
             
             $rule_id = intval($_POST['rule_id']);
+            error_log('MPSP: Processing rule ID: ' . $rule_id);
             if (empty($rule_id)) {
+                error_log('MPSP: Empty rule ID provided');
                 wp_send_json_error('Rule ID is required');
             }
             
@@ -1570,7 +1576,10 @@ class MP_Stripe_Price_Updater {
             }
             
             // Get matching subscriptions for this rule
+            error_log('MPSP: Getting matching subscriptions for rule ' . $rule['id']);
             $matching_subscriptions = $this->get_matching_subscriptions($rule);
+            error_log('MPSP: Found ' . count($matching_subscriptions) . ' matching subscriptions');
+            
             if (count($matching_subscriptions) > 0) {
                 // Create a job first
                 global $wpdb;
@@ -1594,8 +1603,10 @@ class MP_Stripe_Price_Updater {
                 
                 if ($job_id) {
                     $job_id = $wpdb->insert_id;
+                    error_log('MPSP: Created job ' . $job_id . ' for rule ' . $rule['id']);
                     
                     // Process just the first subscription immediately and synchronously
+                    error_log('MPSP: Starting immediate processing for job ' . $job_id);
                     $this->process_single_subscription_immediately($job_id, $rule, $matching_subscriptions[0]);
                     
                     // Verify the job was updated and check if completed
