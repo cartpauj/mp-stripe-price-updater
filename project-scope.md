@@ -15,22 +15,28 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 ## Current Architecture
 
 ### Database Schema
-- **Three-Table Design**: `mpsp_rules`, `mpsp_jobs`, `mpsp_entries` with proper relationships
+- **Three-Table Design**: 
+  - `mpsp_rules`: Rule definitions with gateway targeting and price filters
+  - `mpsp_jobs`: Job execution tracking with status and progress counters
+  - `mpsp_entries`: Individual subscription processing records
 - **Automatic Migration**: Seamless upgrade from legacy options-based installations
-- **Manual Cascade Deletion**: Maintains data integrity across related tables
+- **Proper Indexing**: Strategic indexes on key fields for performance
+- **Data Integrity**: Foreign key relationships maintained manually
 
 ### Job Management System
-- **Single-Job Execution**: Only one job runs at a time, enforced by database flags
-- **Intelligent Continuation**: Jobs persist across cron cycles until completion (fixed critical flaw)
-- **Conservative Processing**: 25 subscriptions per 5-minute cycle for server stability
-- **Real-Time Progress**: Live updates with cancellation support
+- **Single-Job Execution**: Only one job runs at a time, enforced by `current_job` flag
+- **Intelligent Continuation**: Jobs persist across cron cycles until completion
+- **Conservative Processing**: 25 subscriptions per 5-minute cycle (configurable via filter)
+- **Real-Time Progress**: Live AJAX updates with job cancellation support
+- **Job States**: running, completed, cancelled, failed with proper state transitions
 
 ### Key Features
-- **Multi-Gateway Support**: Handle multiple Stripe gateways with automatic API key selection
-- **Advanced Filtering**: Price ranges, billing cycles, membership targeting with live preview
-- **Professional Reporting**: CSV exports with user details, price changes, API mode tracking
-- **Auto-Disable Rules**: Rules automatically disable when processing is complete
-- **Email Notifications**: Automatic reports to MemberPress administrators
+- **Multi-Gateway Support**: Handle multiple Stripe gateways with test/live mode detection
+- **Advanced Filtering**: Price ranges/specific prices, billing cycles, membership targeting
+- **Scalable Preview**: Count + sample display (15 entries) with CSV export option
+- **Professional Reporting**: Multiple CSV export options for rules and job logs
+- **Auto-Disable Rules**: Rules automatically disable when no matching subscriptions remain
+- **Paginated Job Logs**: 50 entries/page with summary view and failed-only exports
 
 ## Critical Technical Fixes
 
@@ -50,14 +56,15 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 - **Permission Checks**: Verify `manage_options` capability for all actions
 
 ### MemberPress Integration
-- **Native Stripe Requests**: Uses `MeprStripeGateway::send_stripe_request()`
-- **Currency Compatibility**: Handles multi-currency with zero decimal support
-- **Plan Reuse**: Leverages `MeprStripeGateway::get_stripe_plan_id()` to reduce API calls
-- **Test Mode Detection**: Proper `MEMBERPRESS_STRIPE_TESTING` constant support
+- **Native Gateway Access**: Integrates directly with `MeprStripeGateway` instances
+- **Currency Compatibility**: Handles multi-currency with zero decimal currency support
+- **Stripe API Integration**: Proper subscription and plan management via Stripe API
+- **Test Mode Detection**: Automatic detection of gateway test/live modes with UI indicators
+- **Subscription Filtering**: Advanced querying of MemberPress subscriptions with status validation
 
 ## Technical Status
 
-**Current Plugin**: 2,774-line enterprise-grade WordPress plugin with:
+**Current Plugin**: 3,150+ line enterprise-grade WordPress plugin with:
 - Responsive admin interface with real-time job monitoring
 - Comprehensive error handling and logging
 - Multi-currency support with proper formatting
@@ -65,10 +72,11 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 - GitHub Actions CI/CD pipeline for releases
 
 ## File Structure
-- **Main Plugin**: `/mp-stripe-price-updater.php` (single file, 2,774 lines)
-- **Database Tables**: Rules → Jobs → Entries relationship
-- **AJAX Handlers**: Real-time status updates and job management
+- **Main Plugin**: `/mp-stripe-price-updater.php` (single file, 3,150+ lines)
+- **Database Tables**: Three-table design: `mpsp_rules`, `mpsp_jobs`, `mpsp_entries`
+- **AJAX Handlers**: 15+ endpoints including CSV export and pagination
 - **Cron Integration**: 5-minute intervals with intelligent job continuation
+- **Version**: 1.2.1 with automatic database migration support
 
 ## Development Standards
 - WordPress coding standards compliance
@@ -77,17 +85,6 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 - Performance optimization with strategic indexing
 - Future-proof integration patterns with MemberPress
 
-## Recent Improvements
-
-### Progress UI Enhancement  
-- **Issue**: Job progress UI not showing after saving new rules (jobs only created by cron every 5 minutes)
-- **Solution**: Immediate job initiation after rule creation
-  - Modified `ajax_save_rule()` to return rule ID
-  - Added `ajax_start_rule_processing()` endpoint  
-  - Enhanced `start_new_job()` to accept dynamic subscription count
-  - Added sessionStorage-based post-reload processing trigger
-- **Flow**: Save rule → page refresh → auto-start job with 1 subscription → show progress UI → cron continues processing
-
 ## Key Learnings for Future Sessions
 1. **Job Management**: Each rule represents one complete processing campaign, not multiple jobs
 2. **Database Migration**: All operational data moved from `wp_options` to custom tables
@@ -95,3 +92,5 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 4. **Security**: All database operations use prepared statements
 5. **Integration**: Leverage MemberPress native methods instead of custom implementations
 6. **UI Responsiveness**: Immediate feedback requires post-save processing triggers, not blocking operations
+7. **Scalability**: Preview shows count + 15-sample, job logs paginated (50/page), CSV exports for large datasets
+8. **PHP Compatibility**: Avoid array spread operators and null coalescing for older PHP versions

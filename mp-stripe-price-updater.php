@@ -53,6 +53,9 @@ class MP_Stripe_Price_Updater {
         add_action('wp_ajax_mpsp_delete_job', array($this, 'ajax_delete_job'));
         add_action('wp_ajax_mpsp_purge_all_data', array($this, 'ajax_purge_all_data'));
         add_action('wp_ajax_mpsp_start_rule_processing', array($this, 'ajax_start_rule_processing'));
+        add_action('wp_ajax_mpsp_export_matching_subscriptions', array($this, 'ajax_export_matching_subscriptions'));
+        add_action('wp_ajax_mpsp_get_job_entries_paginated', array($this, 'ajax_get_job_entries_paginated'));
+        add_action('wp_ajax_mpsp_export_job_entries_csv', array($this, 'ajax_export_job_entries_csv'));
         
         // Cron setup
         add_action('mpsp_process_price_updates', array($this, 'process_price_updates'));
@@ -176,7 +179,8 @@ class MP_Stripe_Price_Updater {
                                         } else {
                                             $mode_indicator = ' (Live Mode)';
                                         }
-                                        echo '<option value="' . esc_attr($gateway->id) . '">' . esc_html(($gateway->label ?: 'Stripe Gateway') . $mode_indicator) . '</option>';
+                                        $gateway_label = !empty($gateway->label) ? $gateway->label : 'Stripe Gateway';
+                                        echo '<option value="' . esc_attr($gateway->id) . '">' . esc_html($gateway_label . $mode_indicator) . '</option>';
                                     }
                                     ?>
                                 </select>
@@ -276,7 +280,8 @@ class MP_Stripe_Price_Updater {
                     </div>
                     
                     <p class="submit">
-                        <button type="button" id="preview_button" class="button" style="display:none;">Preview Affected Subscriptions</button>
+                        <button type="button" id="preview_button" class="button" style="display:none;">Check Affected Subscriptions</button>
+                        <button type="button" id="export_matching_button" class="button" style="display:none; margin-left: 10px;">Export Matching Subscriptions CSV</button>
                         <button type="button" id="save_rule_button" class="button button-primary" style="display:none; margin-left: 10px;">Save Price Update Rule</button>
                     </p>
                 </form>
@@ -625,15 +630,20 @@ class MP_Stripe_Price_Updater {
             // Membership selection handler
             $('#mpsp_membership_id').on('change', function() {
                 if ($(this).val()) {
-                    $('#price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #save_rule_button').show();
+                    $('#price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button').show();
                 } else {
-                    $('#price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #save_rule_button, #subscription_preview').hide();
+                    $('#price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button, #subscription_preview').hide();
                 }
             });
             
             // Preview button
             $('#preview_button').on('click', function() {
                 previewSubscriptions();
+            });
+            
+            // Export matching subscriptions button
+            $('#export_matching_button').on('click', function() {
+                exportMatchingSubscriptions();
             });
             
             // Save rule button
@@ -679,7 +689,7 @@ class MP_Stripe_Price_Updater {
             });
             
             function hideAllRows() {
-                $('#membership_row, #price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #save_rule_button, #subscription_preview').hide();
+                $('#membership_row, #price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button, #subscription_preview').hide();
             }
             
             function loadMemberships(gatewayId) {
@@ -716,6 +726,29 @@ class MP_Stripe_Price_Updater {
                         $('#preview_content').html('<p style="color: red;">Error: ' + response.data + '</p>');
                     }
                 });
+            }
+            
+            function exportMatchingSubscriptions() {
+                var formData = getFormData();
+                if (!validateFormData(formData)) {
+                    return;
+                }
+                
+                $('#export_matching_button').addClass('mpsp-processing').text('Exporting...');
+                
+                // Create a form and submit it to trigger download
+                var form = $('<form method="post" action="' + mpsp_ajax.ajax_url + '">');
+                form.append('<input type="hidden" name="action" value="mpsp_export_matching_subscriptions">');
+                form.append('<input type="hidden" name="nonce" value="' + mpsp_ajax.nonce + '">');
+                form.append('<input type="hidden" name="form_data" value="' + JSON.stringify(formData) + '">');
+                $('body').append(form);
+                form.submit();
+                form.remove();
+                
+                // Reset button after short delay
+                setTimeout(function() {
+                    $('#export_matching_button').removeClass('mpsp-processing').text('Export Matching Subscriptions CSV');
+                }, 2000);
             }
             
             function saveUpdateRule() {
@@ -802,28 +835,57 @@ class MP_Stripe_Price_Updater {
             }
             
             function showJobEntriesModal(jobId) {
+                window.currentJobId = jobId;
+                loadJobEntriesPage(jobId, 1);
+            }
+            
+            function loadJobEntriesPage(jobId, page) {
                 $.post(mpsp_ajax.ajax_url, {
-                    action: 'mpsp_get_job_entries',
+                    action: 'mpsp_get_job_entries_paginated',
                     job_id: jobId,
+                    page: page,
                     nonce: mpsp_ajax.nonce
                 }, function(response) {
                     if (response.success) {
-                        var entries = response.data;
-                        var modalHtml = '<div id="job-entries-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100000; display: flex; align-items: center; justify-content: center;">' +
-                            '<div style="background: white; padding: 20px; border-radius: 5px; max-width: 95%; max-height: 90%; overflow: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); position: relative;">' +
-                            '<button onclick="closeJobEntriesModal()" style="position: absolute; top: 10px; right: 15px; background: none; border: none; font-size: 20px; cursor: pointer; color: #666;">&times;</button>' +
-                            '<h3 style="margin-top: 0; padding-right: 30px;">Job Entries - Job ID: ' + jobId + '</h3>' +
-                            '<div class="mpsp-table-container" style="max-height: 70vh; overflow-y: auto;">' +
+                        var data = response.data;
+                        var summary = data.job_summary;
+                        var entries = data.entries;
+                        var pagination = data.pagination;
+                        
+                        // If modal doesn't exist, create it
+                        if ($('#job-entries-modal').length === 0) {
+                            var modalHtml = '<div id="job-entries-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100000; display: flex; align-items: center; justify-content: center;">' +
+                                '<div style="background: white; padding: 20px; border-radius: 5px; max-width: 95%; max-height: 90%; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); position: relative;">' +
+                                '<button onclick="closeJobEntriesModal()" style="position: absolute; top: 10px; right: 15px; background: none; border: none; font-size: 20px; cursor: pointer; color: #666;">&times;</button>' +
+                                '<div id="job-modal-content"></div>' +
+                                '</div></div>';
+                            $('body').append(modalHtml);
+                        }
+                        
+                        // Update modal content
+                        var contentHtml = '<h3 style="margin-top: 0; padding-right: 30px;">Job Log - ' + summary.rule_name + ' (Job #' + jobId + ')</h3>' +
+                            '<div style="margin-bottom: 15px; padding: 10px; background: #f0f0f0; border-radius: 4px;">' +
+                            '<strong>Summary:</strong> ' +
+                            'Total: ' + summary.total_entries + ' entries | ' +
+                            'Success: <span style="color: green;">' + summary.success_entries + '</span> | ' +
+                            'Errors: <span style="color: red;">' + summary.error_entries + '</span> | ' +
+                            'Status: ' + summary.status.toUpperCase() +
+                            '</div>' +
+                            '<div style="margin-bottom: 15px;">' +
+                            '<button type="button" onclick="exportJobEntries(' + jobId + ', \'all\')" class="button" style="margin-right: 10px;">Export All Entries CSV</button>' +
+                            '<button type="button" onclick="exportJobEntries(' + jobId + ', \'failed\')" class="button">Export Failed Entries CSV</button>' +
+                            '</div>' +
+                            '<div class="mpsp-table-container" style="max-height: 60vh; overflow-y: auto;">' +
                             '<table class="wp-list-table widefat fixed striped mpsp-log-table">' +
                             '<thead><tr><th>Date</th><th>Subscription ID</th><th>User</th><th>Old Price</th><th>New Price</th><th>Status</th><th>API Mode</th><th>Message</th></tr></thead>' +
                             '<tbody>';
                         
                         if (entries.length === 0) {
-                            modalHtml += '<tr><td colspan="8" style="text-align: center; padding: 20px;">No entries found for this job.</td></tr>';
+                            contentHtml += '<tr><td colspan="8" style="text-align: center; padding: 20px;">No entries found for this page.</td></tr>';
                         } else {
                             entries.forEach(function(entry) {
                                 var statusClass = entry.status === 'success' ? 'mpsp-status-success' : 'mpsp-status-error';
-                                modalHtml += '<tr>' +
+                                contentHtml += '<tr>' +
                                     '<td>' + entry.processed_at + '</td>' +
                                     '<td>' + entry.subscription_id + '</td>' +
                                     '<td>' + entry.user_display_name + '</td>' +
@@ -836,16 +898,54 @@ class MP_Stripe_Price_Updater {
                             });
                         }
                         
-                        modalHtml += '</tbody></table></div>' +
-                            '<div style="margin-top: 20px; text-align: right;">' +
-                            '<button type="button" onclick="closeJobEntriesModal()" class="button button-primary">Close</button>' +
-                            '</div></div></div>';
+                        contentHtml += '</tbody></table></div>';
                         
-                        $('body').append(modalHtml);
+                        // Add pagination
+                        if (pagination.total_pages > 1) {
+                            contentHtml += '<div style="margin-top: 15px; text-align: center;">';
+                            contentHtml += '<span>Page ' + pagination.current_page + ' of ' + pagination.total_pages + ' (' + pagination.total_entries + ' total entries)</span><br>';
+                            
+                            if (pagination.current_page > 1) {
+                                contentHtml += '<button type="button" onclick="loadJobEntriesPage(' + jobId + ', ' + (pagination.current_page - 1) + ')" class="button" style="margin: 5px;">Previous</button>';
+                            }
+                            
+                            // Show page numbers (limit to 5 around current page)
+                            var startPage = Math.max(1, pagination.current_page - 2);
+                            var endPage = Math.min(pagination.total_pages, pagination.current_page + 2);
+                            
+                            for (var i = startPage; i <= endPage; i++) {
+                                var buttonClass = i === pagination.current_page ? 'button button-primary' : 'button';
+                                contentHtml += '<button type="button" onclick="loadJobEntriesPage(' + jobId + ', ' + i + ')" class="' + buttonClass + '" style="margin: 2px;">' + i + '</button>';
+                            }
+                            
+                            if (pagination.current_page < pagination.total_pages) {
+                                contentHtml += '<button type="button" onclick="loadJobEntriesPage(' + jobId + ', ' + (pagination.current_page + 1) + ')" class="button" style="margin: 5px;">Next</button>';
+                            }
+                            
+                            contentHtml += '</div>';
+                        }
+                        
+                        contentHtml += '<div style="margin-top: 20px; text-align: right;">' +
+                            '<button type="button" onclick="closeJobEntriesModal()" class="button button-primary">Close</button>' +
+                            '</div>';
+                        
+                        $('#job-modal-content').html(contentHtml);
                     } else {
                         alert('Error loading job entries: ' + response.data);
                     }
                 });
+            }
+            
+            function exportJobEntries(jobId, type) {
+                // Create a form and submit it to trigger download
+                var form = $('<form method="post" action="' + mpsp_ajax.ajax_url + '">');
+                form.append('<input type="hidden" name="action" value="mpsp_export_job_entries_csv">');
+                form.append('<input type="hidden" name="nonce" value="' + mpsp_ajax.nonce + '">');
+                form.append('<input type="hidden" name="job_id" value="' + jobId + '">');
+                form.append('<input type="hidden" name="export_type" value="' + type + '">');
+                $('body').append(form);
+                form.submit();
+                form.remove();
             }
             
             function closeJobEntriesModal() {
@@ -1103,12 +1203,22 @@ class MP_Stripe_Price_Updater {
             wp_send_json_success('<p>No subscriptions match the specified criteria.</p>');
         }
         
-        $html = '<p><strong>Found ' . count($matching_subscriptions) . ' matching subscription(s):</strong></p>';
-        $html .= '<table>';
-        $html .= '<thead><tr><th>User</th><th>Email</th><th>Current Price</th><th>Billing Cycle</th><th>Stripe ID</th><th>Status</th></tr></thead>';
+        $total_count = count($matching_subscriptions);
+        $sample_size = 15; // Show first 15 as sample
+        $sample_subscriptions = array_slice($matching_subscriptions, 0, $sample_size);
+        
+        $html = '<p><strong>Found ' . $total_count . ' matching subscription(s)</strong></p>';
+        $html .= '<p><strong>New price will be: ' . esc_html(MeprAppHelper::format_currency($form_data['new_price'])) . '</strong></p>';
+        
+        if ($total_count > $sample_size) {
+            $html .= '<p><em>Showing first ' . $sample_size . ' subscriptions as a sample:</em></p>';
+        }
+        
+        $html .= '<table style="width:100%; border-collapse: collapse;" border="1">';
+        $html .= '<thead><tr style="background: #f0f0f0;"><th>User</th><th>Email</th><th>Current Price</th><th>Billing Cycle</th><th>Stripe ID</th><th>Status</th></tr></thead>';
         $html .= '<tbody>';
         
-        foreach ($matching_subscriptions as $sub_data) {
+        foreach ($sample_subscriptions as $sub_data) {
             $sub = $sub_data['subscription'];
             $user = $sub_data['user'];
             
@@ -1123,9 +1233,79 @@ class MP_Stripe_Price_Updater {
         }
         
         $html .= '</tbody></table>';
-        $html .= '<p><strong>New price will be: ' . esc_html(MeprAppHelper::format_currency($form_data['new_price'])) . '</strong></p>';
+        
+        if ($total_count > $sample_size) {
+            $html .= '<p><em>Use "Export Matching Subscriptions CSV" button to download the complete list of all ' . $total_count . ' subscriptions.</em></p>';
+        }
         
         wp_send_json_success($html);
+    }
+    
+    public function ajax_export_matching_subscriptions() {
+        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+            wp_die('Invalid nonce');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_die('Insufficient permissions');
+        }
+        
+        $form_data = json_decode(stripslashes($_POST['form_data']), true);
+        if (!$form_data) {
+            wp_die('Invalid form data');
+        }
+        $matching_subscriptions = $this->get_matching_subscriptions($form_data);
+        
+        // Set headers for CSV download
+        $filename = 'matching-subscriptions-' . date('Y-m-d-H-i-s') . '.csv';
+        header('Content-Type: text/csv');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+        
+        // Create file handle for output
+        $output = fopen('php://output', 'w');
+        
+        // Add CSV headers
+        fputcsv($output, array(
+            'User Name',
+            'User Email',
+            'User ID',
+            'Subscription ID',
+            'Stripe Subscription ID',
+            'Current Price',
+            'New Price',
+            'Currency',
+            'Billing Cycle',
+            'Status',
+            'Gateway',
+            'Created Date'
+        ));
+        
+        // Add data rows
+        foreach ($matching_subscriptions as $sub_data) {
+            $sub = $sub_data['subscription'];
+            $user = $sub_data['user'];
+            $gateway = $sub_data['gateway'];
+            
+            fputcsv($output, array(
+                $user->display_name,
+                $user->user_email,
+                $user->ID,
+                $sub->id,
+                $sub->subscr_id,
+                $sub->price,
+                $form_data['new_price'],
+                get_option('mepr_currency_code', 'USD'),
+                $sub->period . ' ' . $sub->period_type,
+                ucfirst($sub->status),
+                !empty($gateway->label) ? $gateway->label : 'Stripe Gateway',
+                $sub->created_at
+            ));
+        }
+        
+        fclose($output);
+        exit();
     }
     
     public function ajax_save_rule() {
@@ -1430,7 +1610,7 @@ class MP_Stripe_Price_Updater {
                 'old_price' => MeprAppHelper::format_currency($entry['old_price']),
                 'new_price' => MeprAppHelper::format_currency($entry['new_price']),
                 'status' => $entry['status'],
-                'message' => $entry['error_message'] ?: 'Success'
+                'message' => !empty($entry['error_message']) ? $entry['error_message'] : 'Success'
             );
         }
         
@@ -1478,6 +1658,185 @@ class MP_Stripe_Price_Updater {
         }
         
         wp_send_json_success($formatted_entries);
+    }
+    
+    public function ajax_get_job_entries_paginated() {
+        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+            wp_send_json_error('Invalid nonce');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+        }
+        
+        global $wpdb;
+        $job_id = intval($_POST['job_id']);
+        $page = !empty($_POST['page']) ? intval($_POST['page']) : 1;
+        $per_page = 50; // Show 50 entries per page
+        $offset = ($page - 1) * $per_page;
+        
+        if (empty($job_id)) {
+            wp_send_json_error('Job ID is required');
+        }
+        
+        // Get job summary first
+        $job_summary = $wpdb->get_row($wpdb->prepare("
+            SELECT 
+                j.*,
+                r.name as rule_name,
+                COUNT(e.id) as total_entries,
+                SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_entries,
+                SUM(CASE WHEN e.status = 'error' THEN 1 ELSE 0 END) as error_entries
+            FROM {$wpdb->prefix}mpsp_jobs j
+            LEFT JOIN {$wpdb->prefix}mpsp_rules r ON j.rule_id = r.id
+            LEFT JOIN {$wpdb->prefix}mpsp_entries e ON j.id = e.job_id
+            WHERE j.id = %d
+            GROUP BY j.id
+        ", $job_id), ARRAY_A);
+        
+        if (!$job_summary) {
+            wp_send_json_error('Job not found');
+        }
+        
+        // Get total count for pagination
+        $total_entries = intval($job_summary['total_entries']);
+        $total_pages = ceil($total_entries / $per_page);
+        
+        // Get paginated entries
+        $entries = $wpdb->get_results($wpdb->prepare("
+            SELECT e.*, u.display_name as user_display_name, u.user_email
+            FROM {$wpdb->prefix}mpsp_entries e
+            LEFT JOIN {$wpdb->users} u ON e.user_id = u.ID
+            WHERE e.job_id = %d
+            ORDER BY e.processed_at DESC
+            LIMIT %d OFFSET %d
+        ", $job_id, $per_page, $offset), ARRAY_A);
+        
+        // Format entries for display
+        $formatted_entries = array();
+        foreach ($entries as $entry) {
+            $formatted_entries[] = array(
+                'processed_at' => date('Y-m-d H:i:s', strtotime($entry['processed_at'])),
+                'subscription_id' => $entry['subscription_id'],
+                'user_display_name' => $entry['user_display_name'] . ' (' . $entry['user_email'] . ')',
+                'old_price' => MeprAppHelper::format_currency($entry['old_price']),
+                'new_price' => MeprAppHelper::format_currency($entry['new_price']),
+                'status' => $entry['status'],
+                'api_mode' => $entry['api_mode'],
+                'error_message' => $entry['error_message']
+            );
+        }
+        
+        wp_send_json_success(array(
+            'job_summary' => $job_summary,
+            'entries' => $formatted_entries,
+            'pagination' => array(
+                'current_page' => $page,
+                'total_pages' => $total_pages,
+                'total_entries' => $total_entries,
+                'per_page' => $per_page
+            )
+        ));
+    }
+    
+    public function ajax_export_job_entries_csv() {
+        if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
+            wp_die('Invalid nonce');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_die('Insufficient permissions');
+        }
+        
+        global $wpdb;
+        $job_id = intval($_POST['job_id']);
+        $export_type = sanitize_text_field($_POST['export_type']); // 'all' or 'failed'
+        
+        if (empty($job_id)) {
+            wp_die('Job ID is required');
+        }
+        
+        // Get job info for filename
+        $job_info = $wpdb->get_row($wpdb->prepare("
+            SELECT j.*, r.name as rule_name 
+            FROM {$wpdb->prefix}mpsp_jobs j
+            LEFT JOIN {$wpdb->prefix}mpsp_rules r ON j.rule_id = r.id
+            WHERE j.id = %d
+        ", $job_id), ARRAY_A);
+        
+        if (!$job_info) {
+            wp_die('Job not found');
+        }
+        
+        // Build query based on export type
+        $where_clause = "e.job_id = %d";
+        $query_params = array($job_id);
+        
+        if ($export_type === 'failed') {
+            $where_clause .= " AND e.status = 'error'";
+        }
+        
+        // Get all entries (or failed only)
+        $query = "
+            SELECT e.*, u.display_name as user_display_name, u.user_email, u.ID as user_id
+            FROM {$wpdb->prefix}mpsp_entries e
+            LEFT JOIN {$wpdb->users} u ON e.user_id = u.ID
+            WHERE $where_clause
+            ORDER BY e.processed_at DESC
+        ";
+        $entries = $wpdb->get_results($wpdb->prepare($query, $query_params), ARRAY_A);
+        
+        // Set headers for CSV download
+        $rule_name = sanitize_file_name(!empty($job_info['rule_name']) ? $job_info['rule_name'] : 'Unknown_Rule');
+        $type_suffix = $export_type === 'failed' ? '-failed-only' : '-all-entries';
+        $filename = 'job-' . $job_id . '-' . $rule_name . $type_suffix . '-' . date('Y-m-d-H-i-s') . '.csv';
+        
+        header('Content-Type: text/csv');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+        
+        // Create file handle for output
+        $output = fopen('php://output', 'w');
+        
+        // Add CSV headers
+        fputcsv($output, array(
+            'Processed Date',
+            'User Name',
+            'User Email',
+            'User ID',
+            'Subscription ID',
+            'Stripe Subscription ID',
+            'Old Price',
+            'New Price',
+            'Currency',
+            'Status',
+            'API Mode',
+            'Stripe Price ID',
+            'Error Message'
+        ));
+        
+        // Add data rows
+        foreach ($entries as $entry) {
+            fputcsv($output, array(
+                $entry['processed_at'],
+                $entry['user_display_name'],
+                $entry['user_email'],
+                $entry['user_id'],
+                $entry['subscription_id'],
+                $entry['stripe_subscription_id'],
+                $entry['old_price'],
+                $entry['new_price'],
+                $entry['currency'],
+                ucfirst($entry['status']),
+                strtoupper($entry['api_mode']),
+                $entry['stripe_price_id'],
+                $entry['error_message']
+            ));
+        }
+        
+        fclose($output);
+        exit();
     }
     
     public function ajax_delete_job() {
