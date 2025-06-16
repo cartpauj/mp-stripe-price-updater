@@ -849,8 +849,12 @@ class MP_Stripe_Price_Updater {
             }
             
             function closeJobEntriesModal() {
+                console.log('closeJobEntriesModal called');
                 $('#job-entries-modal').remove();
             }
+            
+            // Make function globally accessible
+            window.closeJobEntriesModal = closeJobEntriesModal;
             
             function purgeAllData() {
                 if (!confirm('WARNING: This will delete ALL rules, jobs, and entries permanently. This action cannot be undone!\n\nAre you sure you want to proceed?')) {
