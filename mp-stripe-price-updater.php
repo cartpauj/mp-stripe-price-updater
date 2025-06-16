@@ -411,6 +411,21 @@ class MP_Stripe_Price_Updater {
             flex-shrink: 0;
         }
 
+        /* Disabled Button Styles */
+        .mpsp-rule-actions .button.mpsp-disabled-during-job {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background-color: #f5f5f5 !important;
+            border-color: #ddd !important;
+            color: #999 !important;
+        }
+
+        .mpsp-rule-actions .button.mpsp-disabled-during-job:hover {
+            background-color: #f5f5f5 !important;
+            border-color: #ddd !important;
+            color: #999 !important;
+        }
+
         /* Status Indicators */
         .mpsp-status-active {
             color: #46b450;
@@ -767,9 +782,14 @@ class MP_Stripe_Price_Updater {
                     $('#save_rule_button').removeClass('mpsp-processing').text('Save Price Update Rule');
                     
                     if (response.success) {
-                        // Store rule ID to trigger processing after page reload
-                        if (response.data && response.data.rule_id) {
+                        // Only trigger auto-processing if auto_start is true
+                        if (response.data && response.data.rule_id && response.data.auto_start) {
                             sessionStorage.setItem('mpsp_start_processing_rule_id', response.data.rule_id);
+                        }
+                        
+                        // Show message if rule was saved as disabled
+                        if (response.data && response.data.message) {
+                            alert(response.data.message);
                         }
                         
                         location.reload();
@@ -1052,6 +1072,7 @@ class MP_Stripe_Price_Updater {
                     if (response.success && response.data.active) {
                         $('#mpsp-job-status').show();
                         updateJobDisplay(response.data);
+                        updateEnableButtonsState(true);
                         if (!jobStatusInterval) {
                             startJobStatusPolling();
                         }
@@ -1061,6 +1082,7 @@ class MP_Stripe_Price_Updater {
                         if (!showingCompletedJob) {
                             $('#mpsp-job-status').hide();
                         }
+                        updateEnableButtonsState(false);
                         if (jobStatusInterval) {
                             clearInterval(jobStatusInterval);
                             jobStatusInterval = null;
@@ -1107,12 +1129,27 @@ class MP_Stripe_Price_Updater {
                 $('#job-details').text(details);
             }
             
+            function updateEnableButtonsState(jobActive) {
+                if (jobActive) {
+                    // Disable all enable buttons when job is running
+                    $('.enable-rule').prop('disabled', true).addClass('mpsp-disabled-during-job');
+                    $('.enable-rule').attr('title', 'Cannot enable rules while another job is running');
+                } else {
+                    // Re-enable all enable buttons when no job is running
+                    $('.enable-rule').prop('disabled', false).removeClass('mpsp-disabled-during-job');
+                    $('.enable-rule').removeAttr('title');
+                }
+            }
+            
             function startRuleProcessing(ruleId) {
                 // Show job status bar immediately
                 $('#mpsp-job-status').show();
                 $('#job-message').text('Starting processing...');
                 $('#job-progress-bar').css('width', '0%');
                 $('#job-details').text('Initializing job...');
+                
+                // Disable enable buttons when starting a job
+                updateEnableButtonsState(true);
                 
                 $.post(mpsp_ajax.ajax_url, {
                     action: 'mpsp_start_rule_processing',
@@ -1322,6 +1359,12 @@ class MP_Stripe_Price_Updater {
         exit();
     }
     
+    private function has_active_job() {
+        global $wpdb;
+        $active_job = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1");
+        return $active_job > 0;
+    }
+    
     public function ajax_save_rule() {
         if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
             wp_send_json_error('Invalid nonce');
@@ -1339,6 +1382,31 @@ class MP_Stripe_Price_Updater {
             wp_send_json_error('Missing required fields');
         }
         
+        // Create temporary rule object to check matching subscriptions
+        $temp_rule = array(
+            'gateway_id' => sanitize_text_field($rule_data['gateway_id']),
+            'membership_id' => intval($rule_data['membership_id']),
+            'price_filter_type' => sanitize_text_field($rule_data['price_filter_type']),
+            'min_price' => !empty($rule_data['min_price']) ? floatval($rule_data['min_price']) : null,
+            'max_price' => !empty($rule_data['max_price']) ? floatval($rule_data['max_price']) : null,
+            'specific_price' => !empty($rule_data['specific_price']) ? floatval($rule_data['specific_price']) : null,
+            'billing_period' => !empty($rule_data['billing_period']) ? intval($rule_data['billing_period']) : null,
+            'billing_interval' => !empty($rule_data['billing_interval']) ? sanitize_text_field($rule_data['billing_interval']) : null,
+        );
+        
+        // Check for matching subscriptions before saving
+        $matching_subscriptions = $this->get_matching_subscriptions($temp_rule);
+        
+        if (count($matching_subscriptions) === 0) {
+            wp_send_json_error('Cannot save rule: No subscriptions match the specified criteria. Please adjust your filters.');
+        }
+        
+        // Check if a job is currently running
+        $has_active_job = $this->has_active_job();
+        
+        // Determine enabled status based on whether jobs are running
+        $enabled_status = $has_active_job ? 0 : 1;
+        
         global $wpdb;
         
         $result = $wpdb->insert(
@@ -1354,7 +1422,7 @@ class MP_Stripe_Price_Updater {
                 'billing_period' => !empty($rule_data['billing_period']) ? intval($rule_data['billing_period']) : null,
                 'billing_interval' => !empty($rule_data['billing_interval']) ? sanitize_text_field($rule_data['billing_interval']) : null,
                 'new_price' => floatval($rule_data['new_price']),
-                'enabled' => 1,
+                'enabled' => $enabled_status,
                 'created_at' => current_time('mysql'),
                 'updated_at' => current_time('mysql')
             ),
@@ -1365,14 +1433,23 @@ class MP_Stripe_Price_Updater {
             wp_send_json_error('Failed to save rule');
         }
         
-        // Get the newly created rule ID and immediately start processing
         $rule_id = $wpdb->insert_id;
-        $rule = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$wpdb->prefix}mpsp_rules WHERE id = %d", 
-            $rule_id
-        ), ARRAY_A);
         
-        wp_send_json_success(array('rule_id' => $rule_id));
+        // Return different response based on whether auto-processing will occur
+        if ($has_active_job) {
+            wp_send_json_success(array(
+                'rule_id' => $rule_id,
+                'auto_start' => false,
+                'message' => 'Rule saved as disabled because another job is currently running. You can enable it after the current job completes.',
+                'matching_count' => count($matching_subscriptions)
+            ));
+        } else {
+            wp_send_json_success(array(
+                'rule_id' => $rule_id,
+                'auto_start' => true,
+                'matching_count' => count($matching_subscriptions)
+            ));
+        }
     }
     
     public function ajax_delete_rule() {
@@ -1448,6 +1525,11 @@ class MP_Stripe_Price_Updater {
         
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Insufficient permissions');
+        }
+        
+        // Check if a job is currently running
+        if ($this->has_active_job()) {
+            wp_send_json_error('Cannot enable rule while another job is running. Please wait for the current job to complete.');
         }
         
         global $wpdb;
@@ -1978,7 +2060,7 @@ class MP_Stripe_Price_Updater {
                         'error_count' => 0,
                         'started_at' => current_time('mysql'),
                         'last_activity_at' => current_time('mysql'),
-                        'current_job' => 0
+                        'current_job' => 1
                     ),
                     array('%d', '%s', '%d', '%d', '%d', '%d', '%s', '%s', '%d')
                 );
