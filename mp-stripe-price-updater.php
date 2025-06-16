@@ -2390,13 +2390,7 @@ class MP_Stripe_Price_Updater {
     public function process_price_updates() {
         global $wpdb;
         
-        // Check if there's already an active job
-        $current_job = $wpdb->get_row(
-            "SELECT * FROM {$wpdb->prefix}mpsp_jobs WHERE current_job = 1 AND status = 'running'"
-        );
-        if ($current_job) {
-            return; // Another job is running
-        }
+        // Note: Removed the early exit check - we want to continue existing jobs
         
         // Check if MemberPress is still available
         if (!class_exists('MeprOptions') || !class_exists('MeprSubscription')) {
@@ -2735,22 +2729,14 @@ class MP_Stripe_Price_Updater {
         }
         
         // Check if there are more subscriptions to process before completing
-        $all_matching_subscriptions = $this->get_matching_subscriptions($rule);
-        $processed_subscription_ids = $wpdb->get_col($wpdb->prepare(
-            "SELECT subscription_id FROM {$wpdb->prefix}mpsp_entries WHERE job_id = %d",
+        // Get the job's original total count and compare with actual processed count
+        $current_job = $wpdb->get_row($wpdb->prepare(
+            "SELECT total_subscriptions, processed_count FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d",
             $job_id
-        ));
+        ), ARRAY_A);
         
-        // Filter out already processed subscriptions
-        $remaining_subscriptions = array();
-        foreach ($all_matching_subscriptions as $sub_data) {
-            if (!in_array($sub_data['subscription']->id, $processed_subscription_ids)) {
-                $remaining_subscriptions[] = $sub_data;
-            }
-        }
-        
-        // Only complete job if no more subscriptions remain
-        if (empty($remaining_subscriptions)) {
+        // Only complete job if we've processed all subscriptions from the original total
+        if ($current_job && $current_job['processed_count'] >= $current_job['total_subscriptions']) {
             $this->complete_job($job_id, $rule);
         }
     }
