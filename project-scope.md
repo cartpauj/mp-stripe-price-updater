@@ -94,3 +94,4 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 6. **UI Responsiveness**: Immediate feedback requires post-save processing triggers, not blocking operations
 7. **Scalability**: Preview shows count + 15-sample, job logs paginated (50/page), CSV exports for large datasets
 8. **PHP Compatibility**: Avoid array spread operators and null coalescing for older PHP versions
+9. **Concurrency Control**: Single-job enforcement prevents race conditions; rules save as disabled during active jobs; Enable buttons auto-disable; zero-subscription rules rejected
