@@ -27,7 +27,7 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 - **Single-Job Execution**: Only one job runs at a time, enforced by `current_job` flag
 - **Intelligent Continuation**: Jobs persist across cron cycles until completion
 - **Conservative Processing**: 25 subscriptions per 5-minute cycle (configurable via filter)
-- **Real-Time Progress**: Live AJAX updates with job cancellation support
+- **Real-Time Progress**: Live AJAX updates (3-minute polling) with job cancellation support
 - **Job States**: running, completed, cancelled, failed with proper state transitions
 
 ### Key Features
@@ -77,7 +77,7 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 - **Database Tables**: Three-table design: `mpsp_rules`, `mpsp_jobs`, `mpsp_entries`
 - **AJAX Handlers**: 15+ endpoints including CSV export and pagination
 - **Cron Integration**: 5-minute intervals with intelligent job continuation
-- **Version**: 1.2.1 with automatic database migration support
+- **Version**: 1.2.8+ with job continuation fixes
 
 ## Development Standards
 - WordPress coding standards compliance
@@ -85,6 +85,26 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 - Comprehensive exception coverage
 - Performance optimization with strategic indexing
 - Future-proof integration patterns with MemberPress
+
+## Recent Critical Fixes (v1.2.8+)
+
+### Job Continuation Bug
+**Problem**: Jobs getting stuck at partial completion (e.g., 1/2 subscriptions processed)
+
+**Root Causes**:
+1. **Progress Reset Bug**: `processed_count` was reset to batch count instead of cumulative total in `process_job_subscriptions()`
+2. **Early Exit Bug**: `process_price_updates()` was exiting when finding running jobs instead of continuing them
+3. **Job Completion Logic**: Used filtered subscription re-matching instead of comparing `processed_count >= total_subscriptions`
+
+**Fixes Applied**:
+- Load existing counts from database and increment cumulatively
+- Removed early exit check - cron now continues existing jobs
+- Simplified completion logic to compare counts instead of re-filtering subscriptions
+- Added comprehensive debug logging to track subscription processing
+
+### Performance Optimization
+- **AJAX Polling**: Reduced from every 2 seconds to every 3 minutes (180,000ms)
+- **Rationale**: Cron runs every 5 minutes, so 3-minute polling provides adequate progress updates
 
 ## Key Learnings for Future Sessions
 1. **Job Management**: Each rule represents one complete processing campaign, not multiple jobs
@@ -96,3 +116,5 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 7. **Scalability**: Preview shows count + 15-sample, job logs paginated (50/page), CSV exports for large datasets
 8. **PHP Compatibility**: Avoid array spread operators and null coalescing for older PHP versions
 9. **Concurrency Control**: Single-job enforcement prevents race conditions; rules save as disabled during active jobs; Enable buttons auto-disable; zero-subscription rules rejected
+10. **Job Continuation**: Progress tracking must be cumulative across cron cycles, not reset per batch
+11. **Debugging**: Comprehensive logging essential for diagnosing job processing issues
