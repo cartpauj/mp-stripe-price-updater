@@ -773,14 +773,8 @@ class MP_Stripe_Price_Updater {
                     nonce: mpsp_ajax.nonce
                 }, function(response) {
                     if (response.success) {
-                        // Show job status bar immediately and start monitoring
-                        $('#mpsp-job-status').show();
-                        $('#job-message').text('Rule enabled - waiting for cron processing...');
-                        $('#job-progress-bar').css('width', '0%');
-                        $('#job-details').text('Job will start within 5 minutes...');
-                        
-                        // Start polling for job status immediately
-                        startJobStatusPolling();
+                        // Store rule ID to trigger processing after page reload
+                        sessionStorage.setItem('mpsp_start_processing_rule_id', ruleId);
                         location.reload(); // Refresh to show updated rule status
                     } else {
                         alert('Error enabling rule: ' + response.data);
@@ -817,7 +811,7 @@ class MP_Stripe_Price_Updater {
                         var entries = response.data;
                         var modalHtml = '<div id="job-entries-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100000; display: flex; align-items: center; justify-content: center;">' +
                             '<div style="background: white; padding: 20px; border-radius: 5px; max-width: 95%; max-height: 90%; overflow: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1); position: relative;">' +
-                            '<button class="close-modal-btn" style="position: absolute; top: 10px; right: 15px; background: none; border: none; font-size: 20px; cursor: pointer; color: #666;">&times;</button>' +
+                            '<button onclick="closeJobEntriesModal()" style="position: absolute; top: 10px; right: 15px; background: none; border: none; font-size: 20px; cursor: pointer; color: #666;">&times;</button>' +
                             '<h3 style="margin-top: 0; padding-right: 30px;">Job Entries - Job ID: ' + jobId + '</h3>' +
                             '<div class="mpsp-table-container" style="max-height: 70vh; overflow-y: auto;">' +
                             '<table class="wp-list-table widefat fixed striped mpsp-log-table">' +
@@ -848,11 +842,6 @@ class MP_Stripe_Price_Updater {
                             '</div></div></div>';
                         
                         $('body').append(modalHtml);
-                        
-                        // Add event handler for close button
-                        $('.close-modal-btn').on('click', function() {
-                            closeJobEntriesModal();
-                        });
                     } else {
                         alert('Error loading job entries: ' + response.data);
                     }
