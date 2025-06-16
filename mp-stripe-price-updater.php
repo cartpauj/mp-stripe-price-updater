@@ -2306,11 +2306,30 @@ class MP_Stripe_Price_Updater {
         $results = $wpdb->get_results($wpdb->prepare($query, $gateway_string, $criteria['membership_id']));
         $matching = array();
         
+        error_log(sprintf(
+            'MPSP Debug: get_matching_subscriptions found %d active subscriptions for gateway %s, product %d',
+            count($results),
+            $gateway_string,
+            $criteria['membership_id']
+        ));
+        
         foreach ($results as $row) {
             $subscription = new MeprSubscription($row->id);
             
+            error_log(sprintf(
+                'MPSP Debug: Checking subscription %d - current price: %s, target price: %s',
+                $subscription->id,
+                $subscription->price,
+                $criteria['new_price'] ?? 'not set'
+            ));
+            
             // Skip subscriptions that already have the target price
             if (isset($criteria['new_price']) && abs($subscription->price - floatval($criteria['new_price'])) < 0.01) {
+                error_log(sprintf(
+                    'MPSP Debug: Skipping subscription %d - already has target price %s',
+                    $subscription->id,
+                    $criteria['new_price']
+                ));
                 continue;
             }
             
@@ -2333,6 +2352,11 @@ class MP_Stripe_Price_Updater {
                 )
             );
         }
+        
+        error_log(sprintf(
+            'MPSP Debug: get_matching_subscriptions returning %d matching subscriptions',
+            count($matching)
+        ));
         
         return $matching;
     }
@@ -2492,12 +2516,45 @@ class MP_Stripe_Price_Updater {
             $existing_job['id']
         ));
         
+        // Debug logging
+        error_log(sprintf(
+            'MPSP Debug: Job %d - Found %d matching subscriptions, %d already processed',
+            $existing_job['id'],
+            count($all_matching_subscriptions),
+            count($processed_subscription_ids)
+        ));
+        
+        if (!empty($all_matching_subscriptions)) {
+            $all_sub_ids = array_map(function($sub_data) { return $sub_data['subscription']->id; }, $all_matching_subscriptions);
+            error_log(sprintf(
+                'MPSP Debug: All matching subscription IDs: %s',
+                implode(', ', $all_sub_ids)
+            ));
+        }
+        
+        if (!empty($processed_subscription_ids)) {
+            error_log(sprintf(
+                'MPSP Debug: Processed subscription IDs: %s',
+                implode(', ', $processed_subscription_ids)
+            ));
+        }
+        
         // Filter out already processed subscriptions
         $remaining_subscriptions = array();
         foreach ($all_matching_subscriptions as $sub_data) {
             if (!in_array($sub_data['subscription']->id, $processed_subscription_ids)) {
                 $remaining_subscriptions[] = $sub_data;
             }
+        }
+        
+        if (!empty($remaining_subscriptions)) {
+            $remaining_sub_ids = array_map(function($sub_data) { return $sub_data['subscription']->id; }, $remaining_subscriptions);
+            error_log(sprintf(
+                'MPSP Debug: Remaining subscription IDs to process: %s',
+                implode(', ', $remaining_sub_ids)
+            ));
+        } else {
+            error_log('MPSP Debug: No remaining subscriptions to process');
         }
         
         // Check if job is complete
