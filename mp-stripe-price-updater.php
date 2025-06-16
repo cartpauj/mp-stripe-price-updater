@@ -1790,11 +1790,16 @@ class MP_Stripe_Price_Updater {
             $where_clause .= " AND e.status = 'error'";
         }
         
-        // Get all entries (or failed only)
+        // Get all entries (or failed only) with subscription data
         $query = "
-            SELECT e.*, u.display_name as user_display_name, u.user_email, u.ID as user_id
+            SELECT e.*, 
+                   u.display_name as user_display_name, 
+                   u.user_email, 
+                   u.ID as user_id,
+                   s.subscr_id as stripe_subscription_id
             FROM {$wpdb->prefix}mpsp_entries e
             LEFT JOIN {$wpdb->users} u ON e.user_id = u.ID
+            LEFT JOIN {$wpdb->prefix}mepr_subscriptions s ON e.subscription_id = s.id
             WHERE $where_clause
             ORDER BY e.processed_at DESC
         ";
@@ -1831,6 +1836,7 @@ class MP_Stripe_Price_Updater {
         ));
         
         // Add data rows
+        $currency = get_option('mepr_currency_code', 'USD');
         foreach ($entries as $entry) {
             fputcsv($output, array(
                 $entry['processed_at'],
@@ -1841,7 +1847,7 @@ class MP_Stripe_Price_Updater {
                 $entry['stripe_subscription_id'],
                 $entry['old_price'],
                 $entry['new_price'],
-                $entry['currency'],
+                $currency,
                 ucfirst($entry['status']),
                 strtoupper($entry['api_mode']),
                 $entry['stripe_price_id'],
