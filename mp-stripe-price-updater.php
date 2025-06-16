@@ -849,7 +849,6 @@ class MP_Stripe_Price_Updater {
             }
             
             function closeJobEntriesModal() {
-                console.log('closeJobEntriesModal called');
                 $('#job-entries-modal').remove();
             }
             
@@ -1014,7 +1013,6 @@ class MP_Stripe_Price_Updater {
                     rule_id: ruleId,
                     nonce: mpsp_ajax.nonce
                 }, function(response) {
-                    console.log('MPSP: Start processing response:', response);
                     if (response.success) {
                         if (response.data.completed) {
                             // Job completed immediately, show completion state
@@ -1037,9 +1035,8 @@ class MP_Stripe_Price_Updater {
                         alert('Error starting processing: ' + (response.data || 'Unknown error'));
                     }
                 }).fail(function(xhr, status, error) {
-                    console.error('MPSP: AJAX request failed:', xhr, status, error);
                     $('#mpsp-job-status').hide();
-                    alert('Failed to start processing: ' + error + '. Check console for details.');
+                    alert('Failed to start processing. Please try again.');
                 });
             }
             
@@ -1554,10 +1551,8 @@ class MP_Stripe_Price_Updater {
     }
     
     public function ajax_start_rule_processing() {
-        error_log('MPSP: ajax_start_rule_processing called');
         try {
             if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
-                error_log('MPSP: Nonce check failed');
                 wp_send_json_error('Invalid nonce');
             }
             
@@ -1566,9 +1561,7 @@ class MP_Stripe_Price_Updater {
             }
             
             $rule_id = intval($_POST['rule_id']);
-            error_log('MPSP: Processing rule ID: ' . $rule_id);
             if (empty($rule_id)) {
-                error_log('MPSP: Empty rule ID provided');
                 wp_send_json_error('Rule ID is required');
             }
             
@@ -1588,9 +1581,7 @@ class MP_Stripe_Price_Updater {
             }
             
             // Get matching subscriptions for this rule
-            error_log('MPSP: Getting matching subscriptions for rule ' . $rule['id']);
             $matching_subscriptions = $this->get_matching_subscriptions($rule);
-            error_log('MPSP: Found ' . count($matching_subscriptions) . ' matching subscriptions');
             
             if (count($matching_subscriptions) > 0) {
                 // Create a job first
@@ -1615,10 +1606,8 @@ class MP_Stripe_Price_Updater {
                 
                 if ($job_id) {
                     $job_id = $wpdb->insert_id;
-                    error_log('MPSP: Created job ' . $job_id . ' for rule ' . $rule['id']);
                     
                     // Process just the first subscription immediately and synchronously
-                    error_log('MPSP: Starting immediate processing for job ' . $job_id);
                     $this->process_single_subscription_immediately($job_id, $rule, $matching_subscriptions[0]);
                     
                     // Verify the job was updated and check if completed
@@ -1648,7 +1637,6 @@ class MP_Stripe_Price_Updater {
             }
         
         } catch (Exception $e) {
-            error_log('MPSP: ajax_start_rule_processing error: ' . $e->getMessage());
             wp_send_json_error('Processing failed: ' . $e->getMessage());
         }
     }
@@ -1682,10 +1670,7 @@ class MP_Stripe_Price_Updater {
         );
         
         if ($entry_result === false) {
-            error_log('MPSP: Failed to create initial entry: ' . $wpdb->last_error);
             return;
-        } else {
-            error_log('MPSP: Successfully created entry for job ' . $job_id . ', subscription ' . $subscription->id);
         }
         
         $entry_id = $wpdb->insert_id;
@@ -1746,11 +1731,7 @@ class MP_Stripe_Price_Updater {
                 array('%d')
             );
             
-            if ($job_update_result === false) {
-                error_log('MPSP: Failed to update job progress: ' . $wpdb->last_error);
-            } else {
-                error_log('MPSP: Successfully updated job ' . $job_id . ' progress to 1 processed');
-                
+            if ($job_update_result !== false) {
                 // Check if job is complete (all subscriptions processed)
                 $job_data = $wpdb->get_row($wpdb->prepare(
                     "SELECT total_subscriptions, processed_count FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d",
@@ -1760,7 +1741,6 @@ class MP_Stripe_Price_Updater {
                 if ($job_data && $job_data['processed_count'] >= $job_data['total_subscriptions']) {
                     // Job is complete, mark it as completed
                     $this->complete_job($job_id, $rule);
-                    error_log('MPSP: Job ' . $job_id . ' completed after immediate processing');
                 }
             }
             
@@ -1802,7 +1782,6 @@ class MP_Stripe_Price_Updater {
                 if ($job_data && $job_data['processed_count'] >= $job_data['total_subscriptions']) {
                     // Job is complete, mark it as completed
                     $this->complete_job($job_id, $rule);
-                    error_log('MPSP: Job ' . $job_id . ' completed after immediate processing (with error)');
                 }
             }
         }
