@@ -872,9 +872,14 @@ class MP_Stripe_Price_Updater {
                             'Status: ' + summary.status.toUpperCase() +
                             '</div>' +
                             '<div style="margin-bottom: 15px;">' +
-                            '<button type="button" onclick="exportJobEntries(' + jobId + ', \'all\')" class="button" style="margin-right: 10px;">Export All Entries CSV</button>' +
-                            '<button type="button" onclick="exportJobEntries(' + jobId + ', \'failed\')" class="button">Export Failed Entries CSV</button>' +
-                            '</div>' +
+                            '<button type="button" onclick="exportJobEntries(' + jobId + ', \'all\')" class="button" style="margin-right: 10px;">Export All Entries CSV</button>';
+                            
+                        // Only show failed export button if there are failed entries
+                        if (summary.error_entries > 0) {
+                            contentHtml += '<button type="button" onclick="exportJobEntries(' + jobId + ', \'failed\')" class="button">Export Failed Entries CSV</button>';
+                        }
+                        
+                        contentHtml += '</div>' +
                             '<div class="mpsp-table-container" style="max-height: 60vh; overflow-y: auto;">' +
                             '<table class="wp-list-table widefat fixed striped mpsp-log-table">' +
                             '<thead><tr><th>Date</th><th>Subscription ID</th><th>User</th><th>Old Price</th><th>New Price</th><th>Status</th><th>API Mode</th><th>Message</th></tr></thead>' +
@@ -952,8 +957,9 @@ class MP_Stripe_Price_Updater {
                 $('#job-entries-modal').remove();
             }
             
-            // Make function globally accessible
+            // Make functions globally accessible
             window.closeJobEntriesModal = closeJobEntriesModal;
+            window.exportJobEntries = exportJobEntries;
             
             function purgeAllData() {
                 if (!confirm('WARNING: This will delete ALL rules, jobs, and entries permanently. This action cannot be undone!\n\nAre you sure you want to proceed?')) {
