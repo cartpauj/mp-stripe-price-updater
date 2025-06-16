@@ -574,6 +574,12 @@ class MP_Stripe_Price_Updater {
         .form-table td {
             padding: 15px 10px;
         }
+
+        /* Progress Bar Completion Styling */
+        .mpsp-progress-complete {
+            background-color: #46b450 !important; /* Green completion color */
+            box-shadow: 0 0 8px rgba(70, 180, 80, 0.3);
+        }
         </style>
         
         <script>
@@ -1008,14 +1014,14 @@ class MP_Stripe_Price_Updater {
                     console.log('MPSP: Start processing response:', response);
                     if (response.success) {
                         if (response.data.completed) {
-                            // Job completed immediately, show completion message and refresh page
+                            // Job completed immediately, show completion state
                             $('#job-message').text('Processing completed!');
                             $('#job-progress-bar').css('width', '100%');
-                            $('#job-details').text('All subscriptions processed successfully.');
+                            $('#job-details').text('All subscriptions processed successfully. Page will refresh on next navigation.');
                             
-                            setTimeout(function() {
-                                location.reload();
-                            }, 2000); // Show completion for 2 seconds, then refresh
+                            // Hide cancel button and show completion styling
+                            $('#cancel-job-button').hide();
+                            $('#job-progress-bar').addClass('mpsp-progress-complete');
                         } else {
                             // Start monitoring job progress
                             startJobStatusPolling();
