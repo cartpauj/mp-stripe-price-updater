@@ -2645,10 +2645,25 @@ class MP_Stripe_Price_Updater {
             );
         }
         
-        // Complete the job
-        $this->complete_job($job_id, $rule);
+        // Check if there are more subscriptions to process before completing
+        $all_matching_subscriptions = $this->get_matching_subscriptions($rule);
+        $processed_subscription_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT subscription_id FROM {$wpdb->prefix}mpsp_entries WHERE job_id = %d",
+            $job_id
+        ));
         
-        // Note: Auto-disable check is now done in complete_job() after status update
+        // Filter out already processed subscriptions
+        $remaining_subscriptions = array();
+        foreach ($all_matching_subscriptions as $sub_data) {
+            if (!in_array($sub_data['subscription']->id, $processed_subscription_ids)) {
+                $remaining_subscriptions[] = $sub_data;
+            }
+        }
+        
+        // Only complete job if no more subscriptions remain
+        if (empty($remaining_subscriptions)) {
+            $this->complete_job($job_id, $rule);
+        }
     }
     
     private function complete_job($job_id, $rule) {
