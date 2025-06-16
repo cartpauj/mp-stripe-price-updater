@@ -58,7 +58,8 @@ Complete rewrite of a WordPress plugin for automating Stripe subscription price 
 ### MemberPress Integration
 - **Native Gateway Access**: Integrates directly with `MeprStripeGateway` instances
 - **Currency Compatibility**: Handles multi-currency with zero decimal currency support
-- **Stripe API Integration**: Proper subscription and plan management via Stripe API
+- **Stripe Price Management**: Uses MemberPress `get_stripe_plan_id()` method to create/retrieve Stripe prices
+- **Subscription Updates**: Atomic process: Stripe API first, then MemberPress database, with `proration_behavior => 'none'`
 - **Test Mode Detection**: Automatic detection of gateway test/live modes with UI indicators
 - **Subscription Filtering**: Advanced querying of MemberPress subscriptions with status validation
 
