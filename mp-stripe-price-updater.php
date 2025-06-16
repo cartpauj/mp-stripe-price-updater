@@ -2550,8 +2550,15 @@ class MP_Stripe_Price_Updater {
     private function process_job_subscriptions($job_id, $rule, $matching_subscriptions) {
         global $wpdb;
         
-        $success_count = 0;
-        $error_count = 0;
+        // Get current job stats for cumulative counting
+        $current_job = $wpdb->get_row($wpdb->prepare(
+            "SELECT processed_count, success_count, error_count FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d",
+            $job_id
+        ), ARRAY_A);
+        
+        $success_count = intval($current_job['success_count'] ?? 0);
+        $error_count = intval($current_job['error_count'] ?? 0);
+        $processed_count = intval($current_job['processed_count'] ?? 0);
         
         // Set up timeout protection  
         $start_time = time();
@@ -2574,7 +2581,7 @@ class MP_Stripe_Price_Updater {
                     $wpdb->prefix . 'mpsp_jobs',
                     array(
                         'last_activity_at' => current_time('mysql'),
-                        'processed_count' => $success_count + $error_count,
+                        'processed_count' => $processed_count,
                         'success_count' => $success_count,
                         'error_count' => $error_count
                     ),
@@ -2598,15 +2605,18 @@ class MP_Stripe_Price_Updater {
                     
                     if ($mp_result['success']) {
                         $success_count++;
+                        $processed_count++;
                         $status = 'success';
                         $error_message = null;
                     } else {
                         $error_count++;
+                        $processed_count++;
                         $status = 'error';
                         $error_message = 'MemberPress update failed: ' . $mp_result['message'];
                     }
                 } else {
                     $error_count++;
+                    $processed_count++;
                     $status = 'error';
                     $error_message = 'Stripe update failed: ' . $stripe_result['message'];
                 }
@@ -2631,6 +2641,7 @@ class MP_Stripe_Price_Updater {
                 
             } catch (Exception $e) {
                 $error_count++;
+                $processed_count++;
                 
                 // Create error entry
                 $wpdb->insert(
@@ -2656,7 +2667,7 @@ class MP_Stripe_Price_Updater {
                 $wpdb->prefix . 'mpsp_jobs',
                 array(
                     'last_activity_at' => current_time('mysql'),
-                    'processed_count' => $success_count + $error_count,
+                    'processed_count' => $processed_count,
                     'success_count' => $success_count,
                     'error_count' => $error_count
                 ),
