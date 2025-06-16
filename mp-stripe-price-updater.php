@@ -726,8 +726,6 @@ class MP_Stripe_Price_Updater {
                     $('#save_rule_button').removeClass('mpsp-processing').text('Save Price Update Rule');
                     
                     if (response.success) {
-                        alert('Rule saved successfully! Processing will start immediately.');
-                        
                         // Store rule ID to trigger processing after page reload
                         if (response.data && response.data.rule_id) {
                             sessionStorage.setItem('mpsp_start_processing_rule_id', response.data.rule_id);
@@ -1008,8 +1006,19 @@ class MP_Stripe_Price_Updater {
                     nonce: mpsp_ajax.nonce
                 }, function(response) {
                     if (response.success) {
-                        // Start monitoring job progress
-                        startJobStatusPolling();
+                        if (response.data.completed) {
+                            // Job completed immediately, show completion message and refresh page
+                            $('#job-message').text('Processing completed!');
+                            $('#job-progress-bar').css('width', '100%');
+                            $('#job-details').text('All subscriptions processed successfully.');
+                            
+                            setTimeout(function() {
+                                location.reload();
+                            }, 2000); // Show completion for 2 seconds, then refresh
+                        } else {
+                            // Start monitoring job progress
+                            startJobStatusPolling();
+                        }
                     } else {
                         $('#mpsp-job-status').hide();
                         alert('Error starting processing: ' + response.data);
@@ -1589,17 +1598,23 @@ class MP_Stripe_Price_Updater {
                     // Process just the first subscription immediately and synchronously
                     $this->process_single_subscription_immediately($job_id, $rule, $matching_subscriptions[0]);
                     
-                    // Verify the job was updated
+                    // Verify the job was updated and check if completed
                     $updated_job = $wpdb->get_row($wpdb->prepare(
-                        "SELECT processed_count FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d",
+                        "SELECT processed_count, total_subscriptions, status FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d",
                         $job_id
                     ), ARRAY_A);
                     
+                    $is_completed = ($updated_job['status'] === 'completed') || 
+                                   ($updated_job['processed_count'] >= $updated_job['total_subscriptions']);
+                    
                     wp_send_json_success(array(
-                        'message' => 'Processing started',
+                        'message' => $is_completed ? 'Processing completed' : 'Processing started',
+                        'completed' => $is_completed,
                         'debug' => array(
                             'job_id' => $job_id,
-                            'processed_count' => $updated_job['processed_count'] ?? 'unknown'
+                            'processed_count' => $updated_job['processed_count'] ?? 'unknown',
+                            'total_subscriptions' => $updated_job['total_subscriptions'] ?? 'unknown',
+                            'status' => $updated_job['status'] ?? 'unknown'
                         )
                     ));
                 } else {
@@ -1712,6 +1727,18 @@ class MP_Stripe_Price_Updater {
                 error_log('MPSP: Failed to update job progress: ' . $wpdb->last_error);
             } else {
                 error_log('MPSP: Successfully updated job ' . $job_id . ' progress to 1 processed');
+                
+                // Check if job is complete (all subscriptions processed)
+                $job_data = $wpdb->get_row($wpdb->prepare(
+                    "SELECT total_subscriptions, processed_count FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d",
+                    $job_id
+                ), ARRAY_A);
+                
+                if ($job_data && $job_data['processed_count'] >= $job_data['total_subscriptions']) {
+                    // Job is complete, mark it as completed
+                    $this->complete_job($job_id, $rule);
+                    error_log('MPSP: Job ' . $job_id . ' completed after immediate processing');
+                }
             }
             
         } catch (Exception $e) {
@@ -1729,7 +1756,7 @@ class MP_Stripe_Price_Updater {
             );
             
             // Update job progress with error
-            $wpdb->update(
+            $job_update_result = $wpdb->update(
                 $wpdb->prefix . 'mpsp_jobs',
                 array(
                     'last_activity_at' => current_time('mysql'),
@@ -1741,6 +1768,20 @@ class MP_Stripe_Price_Updater {
                 array('%s', '%d', '%d', '%d'),
                 array('%d')
             );
+            
+            if ($job_update_result !== false) {
+                // Check if job is complete (all subscriptions processed, even with errors)
+                $job_data = $wpdb->get_row($wpdb->prepare(
+                    "SELECT total_subscriptions, processed_count FROM {$wpdb->prefix}mpsp_jobs WHERE id = %d",
+                    $job_id
+                ), ARRAY_A);
+                
+                if ($job_data && $job_data['processed_count'] >= $job_data['total_subscriptions']) {
+                    // Job is complete, mark it as completed
+                    $this->complete_job($job_id, $rule);
+                    error_log('MPSP: Job ' . $job_id . ' completed after immediate processing (with error)');
+                }
+            }
         }
     }
     
