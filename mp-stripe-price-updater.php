@@ -3,7 +3,7 @@
  * Plugin Name: MemberPress Stripe Price Updater
  * Plugin URI: https://memberpress.com/
  * Description: Automate subscription price changes for MemberPress Stripe subscriptions.
- * Version: 1.2.15
+ * Version: 1.3.0
  * Author: MemberPress
  * License: GPL v2 or later
  */
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 // Define plugin constants
 define('MPSP_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('MPSP_PLUGIN_PATH', plugin_dir_path(__FILE__));
-define('MPSP_VERSION', '1.2.15');
+define('MPSP_VERSION', '1.3.0');
 
 // Main plugin class
 class MP_Stripe_Price_Updater {
@@ -262,7 +262,27 @@ class MP_Stripe_Price_Updater {
                                 <p class="description">The new price to set for matching subscriptions.</p>
                             </td>
                         </tr>
-                        
+
+                        <?php
+                        // Show tax-inclusive checkbox only if MemberPress is set to inclusive tax calculation
+                        $mepr_options = MeprOptions::fetch();
+                        $is_tax_inclusive = $mepr_options->attr('tax_calc_type') === 'inclusive';
+                        if ($is_tax_inclusive):
+                        ?>
+                        <tr id="price_includes_tax_row" style="display:none;">
+                            <th scope="row">
+                                <label for="mpsp_price_includes_tax">Price Includes Tax</label>
+                            </th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="mpsp_price_includes_tax" id="mpsp_price_includes_tax" value="1" />
+                                    The new price entered above includes tax
+                                </label>
+                                <p class="description">Check this if you entered the total price (with tax included). The plugin will calculate the subtotal automatically.</p>
+                            </td>
+                        </tr>
+                        <?php endif; ?>
+
                         <tr id="rule_name_row" style="display:none;">
                             <th scope="row">
                                 <label for="mpsp_rule_name">Rule Name</label>
@@ -645,7 +665,7 @@ class MP_Stripe_Price_Updater {
             // Membership selection handler
             $('#mpsp_membership_id').on('change', function() {
                 if ($(this).val()) {
-                    $('#price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button').show();
+                    $('#price_filter_row, #billing_terms_row, #new_price_row, #price_includes_tax_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button').show();
                 } else {
                     $('#price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button, #subscription_preview').hide();
                 }
@@ -704,7 +724,7 @@ class MP_Stripe_Price_Updater {
             });
             
             function hideAllRows() {
-                $('#membership_row, #price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button, #subscription_preview').hide();
+                $('#membership_row, #price_filter_row, #billing_terms_row, #new_price_row, #price_includes_tax_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button, #subscription_preview').hide();
             }
             
             function loadMemberships(gatewayId) {
@@ -1027,6 +1047,7 @@ class MP_Stripe_Price_Updater {
                     billing_period: $('input[name="mpsp_billing_period"]').val(),
                     billing_interval: $('select[name="mpsp_billing_interval"]').val(),
                     new_price: $('input[name="mpsp_new_price"]').val(),
+                    price_includes_tax: $('#mpsp_price_includes_tax').is(':checked') ? 1 : 0,
                     rule_name: $('input[name="mpsp_rule_name"]').val()
                 };
             }
@@ -1368,19 +1389,24 @@ class MP_Stripe_Price_Updater {
         if (!check_ajax_referer('mpsp_nonce', 'nonce', false)) {
             wp_send_json_error('Invalid nonce');
         }
-        
+
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Insufficient permissions');
         }
-        
+
         $rule_data = $_POST['rule_data'];
-        
+
         // Validate rule data
-        if (empty($rule_data['gateway_id']) || empty($rule_data['membership_id']) || 
+        if (empty($rule_data['gateway_id']) || empty($rule_data['membership_id']) ||
             empty($rule_data['new_price']) || empty($rule_data['rule_name'])) {
             wp_send_json_error('Missing required fields');
         }
-        
+
+        // Store the price as-entered and the tax-inclusive flag
+        // Conversion will happen per-subscription in update_memberpress_subscription()
+        $new_price = floatval($rule_data['new_price']);
+        $price_includes_tax = !empty($rule_data['price_includes_tax']) ? 1 : 0;
+
         // Create temporary rule object to check matching subscriptions
         $temp_rule = array(
             'gateway_id' => sanitize_text_field($rule_data['gateway_id']),
@@ -1420,12 +1446,13 @@ class MP_Stripe_Price_Updater {
                 'specific_price' => !empty($rule_data['specific_price']) ? floatval($rule_data['specific_price']) : null,
                 'billing_period' => !empty($rule_data['billing_period']) ? intval($rule_data['billing_period']) : null,
                 'billing_interval' => !empty($rule_data['billing_interval']) ? sanitize_text_field($rule_data['billing_interval']) : null,
-                'new_price' => floatval($rule_data['new_price']),
+                'new_price' => $new_price,
+                'price_includes_tax' => $price_includes_tax,
                 'enabled' => $enabled_status,
                 'created_at' => current_time('mysql'),
                 'updated_at' => current_time('mysql')
             ),
-            array('%s', '%s', '%d', '%s', '%f', '%f', '%f', '%d', '%s', '%f', '%d', '%s', '%s')
+            array('%s', '%s', '%d', '%s', '%f', '%f', '%f', '%d', '%s', '%f', '%d', '%d', '%s', '%s')
         );
         
         if ($result === false) {
@@ -3016,25 +3043,48 @@ class MP_Stripe_Price_Updater {
     
     private function update_memberpress_subscription($subscription, $rule) {
         global $wpdb;
-        
+
         try {
+            $new_price = floatval($rule['new_price']);
+            $price_includes_tax = !empty($rule['price_includes_tax']);
+
+            // If price includes tax and subscription has tax, calculate the subtotal first
+            if ($price_includes_tax && $subscription->tax_rate > 0) {
+                // User entered total price - convert to subtotal
+                // Formula: subtotal = total / (1 + tax_rate/100)
+                $new_price = $new_price / (1 + ($subscription->tax_rate / 100.00));
+                $new_price = MeprUtils::format_float($new_price, 2);
+            }
+
+            $new_total = $new_price;
+            $new_tax_amount = 0.00;
+
+            // If the subscription has taxes, recalculate them based on the existing tax rate
+            if ($subscription->tax_rate > 0) {
+                // The new_price is now the subtotal (pre-tax amount)
+                // Calculate tax amount based on the existing subscription's tax rate
+                $new_tax_amount = round($new_price * ($subscription->tax_rate / 100.00), 2, PHP_ROUND_HALF_DOWN);
+                $new_total = MeprUtils::format_float($new_price + $new_tax_amount, 2);
+            }
+
             // Direct database update to avoid triggering emails, webhooks, and other events
             // Only update the subscription - existing transactions should remain unchanged
             $updated = $wpdb->update(
                 $wpdb->prefix . 'mepr_subscriptions',
                 array(
-                    'price' => $rule['new_price'],
-                    'total' => $rule['new_price']
+                    'price' => $new_price,
+                    'total' => $new_total,
+                    'tax_amount' => $new_tax_amount
                 ),
                 array('id' => $subscription->id),
-                array('%f', '%f'),
+                array('%f', '%f', '%f'),
                 array('%d')
             );
-            
+
             if ($updated === false) {
                 return array('success' => false, 'message' => 'Failed to update subscription in database');
             }
-            
+
             return array('success' => true);
         } catch (Exception $e) {
             return array('success' => false, 'message' => $e->getMessage());
@@ -3442,6 +3492,7 @@ class MP_Stripe_Price_Updater {
             billing_period int(11) NULL,
             billing_interval varchar(20) NULL,
             new_price decimal(10,2) NOT NULL,
+            price_includes_tax tinyint(1) NOT NULL DEFAULT 0,
             enabled tinyint(1) NOT NULL DEFAULT 1,
             auto_disabled_at datetime NULL,
             created_at datetime NOT NULL,
