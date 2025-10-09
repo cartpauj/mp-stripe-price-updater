@@ -2987,18 +2987,33 @@ class MP_Stripe_Price_Updater {
                 );
             }
             
+            // Calculate the correct subtotal (pre-tax price) for Stripe
+            // This MUST match the calculation in update_memberpress_subscription()
+            $new_price = floatval($rule['new_price']);
+            $price_includes_tax = !empty($rule['price_includes_tax']);
+
+            // If price includes tax and subscription has tax, calculate the subtotal
+            if ($price_includes_tax && $subscription->tax_rate > 0) {
+                // User entered total price - convert to subtotal
+                // Formula: subtotal = total / (1 + tax_rate/100)
+                $new_price = $new_price / (1 + ($subscription->tax_rate / 100.00));
+                $new_price = MeprUtils::format_float($new_price, 2);
+            }
+
             // Get or create Stripe price using MemberPress gateway method
             try {
                 // Get the product associated with this subscription
                 $product = new MeprProduct($subscription->product_id);
-                
+
                 // Use MemberPress method to get or create a price/plan ID
-                $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $rule['new_price']);
-                
+                // IMPORTANT: $new_price here is the subtotal (pre-tax amount) as required by MemberPress
+                // See MeprProduct.php line 1626: @param string $amount The payment amount (excluding tax)
+                $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $new_price);
+
                 if (empty($plan_id)) {
                     return array('success' => false, 'message' => 'Failed to get or create Stripe price/plan');
                 }
-                
+
                 $new_price_id = $plan_id;
             } catch (Exception $e) {
                 return array('success' => false, 'message' => 'Error creating Stripe price: ' . $e->getMessage());
