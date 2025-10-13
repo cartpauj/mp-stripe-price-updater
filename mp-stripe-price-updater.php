@@ -20,25 +20,28 @@ define('MPSP_VERSION', '1.3.2');
 
 // Main plugin class
 class MP_Stripe_Price_Updater {
-    
+
     private static $instance = null;
-    
+
+    // Track tax behavior for current subscription being processed
+    private $current_tax_behavior = null;
+
     public static function get_instance() {
         if (null == self::$instance) {
             self::$instance = new self();
         }
         return self::$instance;
     }
-    
+
     private function __construct() {
         add_action('admin_init', array($this, 'admin_init'));
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('admin_enqueue_scripts', array($this, 'admin_scripts'));
-        
+
         // Create database tables on activation and check version
         register_activation_hook(__FILE__, array($this, 'create_database_tables'));
         add_action('admin_init', array($this, 'check_database_version'));
-        
+
         // AJAX handlers
         add_action('wp_ajax_mpsp_get_memberships', array($this, 'ajax_get_memberships'));
         add_action('wp_ajax_mpsp_preview_subscriptions', array($this, 'ajax_preview_subscriptions'));
@@ -56,16 +59,19 @@ class MP_Stripe_Price_Updater {
         add_action('wp_ajax_mpsp_export_matching_subscriptions', array($this, 'ajax_export_matching_subscriptions'));
         add_action('wp_ajax_mpsp_get_job_entries_paginated', array($this, 'ajax_get_job_entries_paginated'));
         add_action('wp_ajax_mpsp_export_job_entries_csv', array($this, 'ajax_export_job_entries_csv'));
-        
+
+        // Hook into MemberPress Stripe plan creation to add tax_behavior
+        add_filter('mepr_stripe_create_plan_args', array($this, 'add_tax_behavior_to_stripe_plan'), 10, 2);
+
         // Cron setup
         add_action('mpsp_process_price_updates', array($this, 'process_price_updates'));
         add_filter('cron_schedules', array($this, 'add_cron_intervals'));
-        
+
         // Schedule cron if not already scheduled
         if (!wp_next_scheduled('mpsp_process_price_updates')) {
             wp_schedule_event(time(), 'every_5_minutes', 'mpsp_process_price_updates');
         }
-        
+
         register_deactivation_hook(__FILE__, array($this, 'deactivate'));
     }
 
@@ -108,14 +114,38 @@ class MP_Stripe_Price_Updater {
         if ($hook !== 'memberpress_page_mp-stripe-price-updater') {
             return;
         }
-        
+
         wp_enqueue_script('jquery');
         wp_localize_script('jquery', 'mpsp_ajax', array(
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('mpsp_nonce')
         ));
     }
-    
+
+    /**
+     * Filter callback to add tax_behavior to Stripe plan/price creation
+     * This ensures Stripe correctly handles inclusive vs exclusive taxes
+     */
+    public function add_tax_behavior_to_stripe_plan($args, $sub) {
+        // If we've set a tax behavior for this subscription, use it
+        if ($this->current_tax_behavior !== null) {
+            $args['tax_behavior'] = $this->current_tax_behavior;
+        } else {
+            // Fallback: use current MemberPress settings
+            // If subscription has a tax rate, determine behavior from MP settings
+            if (isset($sub->tax_rate) && $sub->tax_rate > 0) {
+                $mepr_options = MeprOptions::fetch();
+                $is_inclusive = $mepr_options->attr('tax_calc_type') === 'inclusive';
+                $args['tax_behavior'] = $is_inclusive ? 'inclusive' : 'exclusive';
+            } else {
+                // No tax on subscription, use unspecified
+                $args['tax_behavior'] = 'unspecified';
+            }
+        }
+
+        return $args;
+    }
+
     public function admin_page() {
         // Check if MemberPress is active
         if (!class_exists('MeprOptions') || !class_exists('MeprSubscription')) {
@@ -264,10 +294,11 @@ class MP_Stripe_Price_Updater {
                         </tr>
 
                         <?php
-                        // Show tax-inclusive checkbox only if MemberPress is set to inclusive tax calculation
+                        // Show "Price Includes Tax" checkbox if taxes are enabled
+                        // This allows updating subscriptions that may have been created with different tax settings
                         $mepr_options = MeprOptions::fetch();
-                        $is_tax_inclusive = $mepr_options->attr('tax_calc_type') === 'inclusive';
-                        if ($is_tax_inclusive):
+                        $taxes_enabled = $mepr_options->attr('tax_calc_enabled') === true || $mepr_options->attr('tax_calc_enabled') === '1';
+                        if ($taxes_enabled):
                         ?>
                         <tr id="price_includes_tax_row" style="display:none;">
                             <th scope="row">
@@ -3000,6 +3031,15 @@ class MP_Stripe_Price_Updater {
                 $new_price = MeprUtils::format_float($new_price, 2);
             }
 
+            // Determine tax behavior for Stripe price
+            // When user checks "Price Includes Tax", treat as inclusive in Stripe
+            // Otherwise, treat as exclusive
+            if ($subscription->tax_rate > 0) {
+                $this->current_tax_behavior = $price_includes_tax ? 'inclusive' : 'exclusive';
+            } else {
+                $this->current_tax_behavior = 'unspecified';
+            }
+
             // Get or create Stripe price using MemberPress gateway method
             try {
                 // Get the product associated with this subscription
@@ -3017,6 +3057,9 @@ class MP_Stripe_Price_Updater {
                 $new_price_id = $plan_id;
             } catch (Exception $e) {
                 return array('success' => false, 'message' => 'Error creating Stripe price: ' . $e->getMessage());
+            } finally {
+                // Reset tax behavior after use
+                $this->current_tax_behavior = null;
             }
             
             // Update subscription with new price
