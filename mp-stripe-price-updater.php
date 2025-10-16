@@ -125,18 +125,17 @@ class MP_Stripe_Price_Updater {
     /**
      * Filter callback to add tax_behavior to Stripe plan/price creation
      * This ensures Stripe correctly handles inclusive vs exclusive taxes
+     * Works independently of MemberPress global tax settings
      */
     public function add_tax_behavior_to_stripe_plan($args, $sub) {
         // If we've set a tax behavior for this subscription, use it
         if ($this->current_tax_behavior !== null) {
             $args['tax_behavior'] = $this->current_tax_behavior;
         } else {
-            // Fallback: use current MemberPress settings
-            // If subscription has a tax rate, determine behavior from MP settings
+            // Fallback: if subscription has a tax rate, default to exclusive
+            // (This should rarely happen as we set current_tax_behavior before creating prices)
             if (isset($sub->tax_rate) && $sub->tax_rate > 0) {
-                $mepr_options = MeprOptions::fetch();
-                $is_inclusive = $mepr_options->attr('tax_calc_type') === 'inclusive';
-                $args['tax_behavior'] = $is_inclusive ? 'inclusive' : 'exclusive';
+                $args['tax_behavior'] = 'exclusive';
             } else {
                 // No tax on subscription, use unspecified
                 $args['tax_behavior'] = 'unspecified';
@@ -293,13 +292,8 @@ class MP_Stripe_Price_Updater {
                             </td>
                         </tr>
 
-                        <?php
-                        // Show "Price Includes Tax" checkbox if taxes are enabled
-                        // This allows updating subscriptions that may have been created with different tax settings
-                        $mepr_options = MeprOptions::fetch();
-                        $taxes_enabled = $mepr_options->attr('tax_calc_enabled') === true || $mepr_options->attr('tax_calc_enabled') === '1';
-                        if ($taxes_enabled):
-                        ?>
+                        <!-- Always show "Price Includes Tax" checkbox since we're updating existing subscriptions -->
+                        <!-- The subscription itself determines if it has taxes (tax_rate > 0 and tax_amount > 0) -->
                         <tr id="price_includes_tax_row" style="display:none;">
                             <th scope="row">
                                 <label for="mpsp_price_includes_tax">Price Includes Tax</label>
@@ -312,7 +306,6 @@ class MP_Stripe_Price_Updater {
                                 <p class="description">Check this if you entered the total price (with tax included). The plugin will calculate the subtotal automatically.</p>
                             </td>
                         </tr>
-                        <?php endif; ?>
 
                         <tr id="rule_name_row" style="display:none;">
                             <th scope="row">
