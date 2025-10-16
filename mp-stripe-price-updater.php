@@ -23,9 +23,6 @@ class MP_Stripe_Price_Updater {
 
     private static $instance = null;
 
-    // Track tax behavior for current subscription being processed
-    private $current_tax_behavior = null;
-
     public static function get_instance() {
         if (null == self::$instance) {
             self::$instance = new self();
@@ -60,8 +57,8 @@ class MP_Stripe_Price_Updater {
         add_action('wp_ajax_mpsp_get_job_entries_paginated', array($this, 'ajax_get_job_entries_paginated'));
         add_action('wp_ajax_mpsp_export_job_entries_csv', array($this, 'ajax_export_job_entries_csv'));
 
-        // Hook into MemberPress Stripe plan creation to add tax_behavior
-        add_filter('mepr_stripe_create_plan_args', array($this, 'add_tax_behavior_to_stripe_plan'), 10, 2);
+        // Note: Stripe Plans API (legacy) does not support tax_behavior parameter
+        // Only the newer Prices API supports it, but MemberPress uses Plans for recurring subscriptions
 
         // Cron setup
         add_action('mpsp_process_price_updates', array($this, 'process_price_updates'));
@@ -120,29 +117,6 @@ class MP_Stripe_Price_Updater {
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('mpsp_nonce')
         ));
-    }
-
-    /**
-     * Filter callback to add tax_behavior to Stripe plan/price creation
-     * This ensures Stripe correctly handles inclusive vs exclusive taxes
-     * Works independently of MemberPress global tax settings
-     */
-    public function add_tax_behavior_to_stripe_plan($args, $sub) {
-        // If we've set a tax behavior for this subscription, use it
-        if ($this->current_tax_behavior !== null) {
-            $args['tax_behavior'] = $this->current_tax_behavior;
-        } else {
-            // Fallback: if subscription has a tax rate, default to exclusive
-            // (This should rarely happen as we set current_tax_behavior before creating prices)
-            if (isset($sub->tax_rate) && $sub->tax_rate > 0) {
-                $args['tax_behavior'] = 'exclusive';
-            } else {
-                // No tax on subscription, use unspecified
-                $args['tax_behavior'] = 'unspecified';
-            }
-        }
-
-        return $args;
     }
 
     public function admin_page() {
@@ -303,7 +277,10 @@ class MP_Stripe_Price_Updater {
                                     <input type="checkbox" name="mpsp_price_includes_tax" id="mpsp_price_includes_tax" value="1" />
                                     The new price entered above includes tax
                                 </label>
-                                <p class="description">Check this if you entered the total price (with tax included). The plugin will calculate the subtotal automatically.</p>
+                                <p class="description">
+                                    Check this if you entered the total price (with tax included). The plugin will calculate and store the subtotal.<br>
+                                    <strong>Note:</strong> Both MemberPress and Stripe will display prices as exclusive (subtotal + tax) regardless of this setting.
+                                </p>
                             </td>
                         </tr>
 
@@ -3011,27 +2988,19 @@ class MP_Stripe_Price_Updater {
                 );
             }
             
-            // Calculate the correct subtotal (pre-tax price) for Stripe
-            // This MUST match the calculation in update_memberpress_subscription()
+            // Calculate the subtotal (pre-tax price) for Stripe
+            // Stripe Plans API always treats taxes as exclusive (added on top)
             $new_price = floatval($rule['new_price']);
             $price_includes_tax = !empty($rule['price_includes_tax']);
 
-            // If price includes tax and subscription has tax, calculate the subtotal
+            // If user entered price including tax, convert to subtotal
             if ($price_includes_tax && $subscription->tax_rate > 0) {
-                // User entered total price - convert to subtotal
+                // User entered total price (with tax) - convert to subtotal
                 // Formula: subtotal = total / (1 + tax_rate/100)
                 $new_price = $new_price / (1 + ($subscription->tax_rate / 100.00));
                 $new_price = MeprUtils::format_float($new_price, 2);
             }
-
-            // Determine tax behavior for Stripe price
-            // When user checks "Price Includes Tax", treat as inclusive in Stripe
-            // Otherwise, treat as exclusive
-            if ($subscription->tax_rate > 0) {
-                $this->current_tax_behavior = $price_includes_tax ? 'inclusive' : 'exclusive';
-            } else {
-                $this->current_tax_behavior = 'unspecified';
-            }
+            // If checkbox NOT checked: user entered subtotal, use as-is
 
             // Get or create Stripe price using MemberPress gateway method
             try {
@@ -3039,8 +3008,8 @@ class MP_Stripe_Price_Updater {
                 $product = new MeprProduct($subscription->product_id);
 
                 // Use MemberPress method to get or create a price/plan ID
-                // IMPORTANT: $new_price here is the subtotal (pre-tax amount) as required by MemberPress
-                // See MeprProduct.php line 1626: @param string $amount The payment amount (excluding tax)
+                // IMPORTANT: $new_price here is the subtotal (pre-tax amount)
+                // Stripe Plans API will always treat this as exclusive (tax added on top)
                 $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $new_price);
 
                 if (empty($plan_id)) {
@@ -3050,9 +3019,6 @@ class MP_Stripe_Price_Updater {
                 $new_price_id = $plan_id;
             } catch (Exception $e) {
                 return array('success' => false, 'message' => 'Error creating Stripe price: ' . $e->getMessage());
-            } finally {
-                // Reset tax behavior after use
-                $this->current_tax_behavior = null;
             }
             
             // Update subscription with new price
