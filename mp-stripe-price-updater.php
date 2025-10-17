@@ -266,24 +266,6 @@ class MP_Stripe_Price_Updater {
                             </td>
                         </tr>
 
-                        <!-- Always show "Price Includes Tax" checkbox since we're updating existing subscriptions -->
-                        <!-- The subscription itself determines if it has taxes (tax_rate > 0 and tax_amount > 0) -->
-                        <tr id="price_includes_tax_row" style="display:none;">
-                            <th scope="row">
-                                <label for="mpsp_price_includes_tax">Price Includes Tax</label>
-                            </th>
-                            <td>
-                                <label>
-                                    <input type="checkbox" name="mpsp_price_includes_tax" id="mpsp_price_includes_tax" value="1" />
-                                    The new price entered above includes tax
-                                </label>
-                                <p class="description">
-                                    Check this if you entered the total price (with tax included). The plugin will calculate and store the subtotal.<br>
-                                    <strong>Note:</strong> Both MemberPress and Stripe will display prices as exclusive (subtotal + tax) regardless of this setting.
-                                </p>
-                            </td>
-                        </tr>
-
                         <tr id="rule_name_row" style="display:none;">
                             <th scope="row">
                                 <label for="mpsp_rule_name">Rule Name</label>
@@ -666,7 +648,7 @@ class MP_Stripe_Price_Updater {
             // Membership selection handler
             $('#mpsp_membership_id').on('change', function() {
                 if ($(this).val()) {
-                    $('#price_filter_row, #billing_terms_row, #new_price_row, #price_includes_tax_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button').show();
+                    $('#price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button').show();
                 } else {
                     $('#price_filter_row, #billing_terms_row, #new_price_row, #rule_name_row, #preview_button, #export_matching_button, #save_rule_button, #subscription_preview').hide();
                 }
@@ -1048,7 +1030,6 @@ class MP_Stripe_Price_Updater {
                     billing_period: $('input[name="mpsp_billing_period"]').val(),
                     billing_interval: $('select[name="mpsp_billing_interval"]').val(),
                     new_price: $('input[name="mpsp_new_price"]').val(),
-                    price_includes_tax: $('#mpsp_price_includes_tax').is(':checked') ? 1 : 0,
                     rule_name: $('input[name="mpsp_rule_name"]').val()
                 };
             }
@@ -1404,9 +1385,8 @@ class MP_Stripe_Price_Updater {
         }
 
         // Store the price as-entered and the tax-inclusive flag
-        // Conversion will happen per-subscription in update_memberpress_subscription()
+        // Price entered by user - will be interpreted based on Stripe subscription's existing tax configuration
         $new_price = floatval($rule_data['new_price']);
-        $price_includes_tax = !empty($rule_data['price_includes_tax']) ? 1 : 0;
 
         // Create temporary rule object to check matching subscriptions
         $temp_rule = array(
@@ -1448,12 +1428,11 @@ class MP_Stripe_Price_Updater {
                 'billing_period' => !empty($rule_data['billing_period']) ? intval($rule_data['billing_period']) : null,
                 'billing_interval' => !empty($rule_data['billing_interval']) ? sanitize_text_field($rule_data['billing_interval']) : null,
                 'new_price' => $new_price,
-                'price_includes_tax' => $price_includes_tax,
                 'enabled' => $enabled_status,
                 'created_at' => current_time('mysql'),
                 'updated_at' => current_time('mysql')
             ),
-            array('%s', '%s', '%d', '%s', '%f', '%f', '%f', '%d', '%s', '%f', '%d', '%d', '%s', '%s')
+            array('%s', '%s', '%d', '%s', '%f', '%f', '%f', '%d', '%s', '%f', '%d', '%s', '%s')
         );
         
         if ($result === false) {
@@ -2194,7 +2173,10 @@ class MP_Stripe_Price_Updater {
                 
                 if ($stripe_result['success']) {
                     // Update in MemberPress
-                    $mp_result = $this->update_memberpress_subscription($subscription, $rule);
+                    // Pass the tax configuration info from Stripe
+                    $rule_with_tax_info = $rule;
+                    $rule_with_tax_info['stripe_tax_is_inclusive'] = $stripe_result['stripe_tax_is_inclusive'] ?? false;
+                    $mp_result = $this->update_memberpress_subscription($subscription, $rule_with_tax_info);
                     
                     if ($mp_result['success']) {
                         $status = 'success';
@@ -2622,7 +2604,10 @@ class MP_Stripe_Price_Updater {
                 
                 if ($stripe_result['success']) {
                     // Update in MemberPress
-                    $mp_result = $this->update_memberpress_subscription($subscription, $rule);
+                    // Pass the tax configuration info from Stripe
+                    $rule_with_tax_info = $rule;
+                    $rule_with_tax_info['stripe_tax_is_inclusive'] = $stripe_result['stripe_tax_is_inclusive'] ?? false;
+                    $mp_result = $this->update_memberpress_subscription($subscription, $rule_with_tax_info);
                     
                     if ($mp_result['success']) {
                         $success_count++;
@@ -2980,27 +2965,40 @@ class MP_Stripe_Price_Updater {
             // Check currency compatibility before proceeding
             $stripe_currency = strtoupper($stripe_sub['currency'] ?? '');
             $memberpress_currency = strtoupper($options->currency_code ?? '');
-            
+
             if (!empty($stripe_currency) && !empty($memberpress_currency) && $stripe_currency !== $memberpress_currency) {
                 return array(
-                    'success' => false, 
+                    'success' => false,
                     'message' => "Currency mismatch: Stripe subscription uses {$stripe_currency} but MemberPress is configured for {$memberpress_currency}. Cannot update subscription with different currency."
                 );
             }
-            
-            // Calculate the subtotal (pre-tax price) for Stripe
-            // Stripe Plans API always treats taxes as exclusive (added on top)
-            $new_price = floatval($rule['new_price']);
-            $price_includes_tax = !empty($rule['price_includes_tax']);
 
-            // If user entered price including tax, convert to subtotal
-            if ($price_includes_tax && $subscription->tax_rate > 0) {
-                // User entered total price (with tax) - convert to subtotal
-                // Formula: subtotal = total / (1 + tax_rate/100)
-                $new_price = $new_price / (1 + ($subscription->tax_rate / 100.00));
-                $new_price = MeprUtils::format_float($new_price, 2);
+            // Detect if existing subscription has inclusive or exclusive tax rates
+            $existing_tax_is_inclusive = false;
+            if (!empty($stripe_sub['items']['data'][0]['tax_rates']) && is_array($stripe_sub['items']['data'][0]['tax_rates'])) {
+                $tax_rate_id = $stripe_sub['items']['data'][0]['tax_rates'][0]['id'] ?? null;
+                if ($tax_rate_id) {
+                    try {
+                        // Look up the tax rate to check if it's inclusive
+                        $tax_rate_obj = $gateway->send_stripe_request("tax_rates/{$tax_rate_id}", array(), 'get');
+                        if (!empty($tax_rate_obj['inclusive'])) {
+                            $existing_tax_is_inclusive = true;
+                        }
+                    } catch (Exception $e) {
+                        // If we can't retrieve the tax rate, assume exclusive as default
+                        error_log("MPSP: Could not retrieve tax rate {$tax_rate_id}: " . $e->getMessage());
+                    }
+                }
             }
-            // If checkbox NOT checked: user entered subtotal, use as-is
+
+            // Calculate the price to send to Stripe based on existing tax configuration
+            $new_price = floatval($rule['new_price']);
+            $price_for_stripe = $new_price;  // By default, use entered price as-is
+
+            // The interpretation depends on the existing subscription's tax configuration:
+            // - If inclusive: entered price is treated as TOTAL (with tax), send to Stripe as-is
+            // - If exclusive: entered price is treated as SUBTOTAL, send to Stripe as-is
+            // No conversion needed - the existing tax rates will handle the calculation correctly
 
             // Get or create Stripe price using MemberPress gateway method
             try {
@@ -3008,9 +3006,7 @@ class MP_Stripe_Price_Updater {
                 $product = new MeprProduct($subscription->product_id);
 
                 // Use MemberPress method to get or create a price/plan ID
-                // IMPORTANT: $new_price here is the subtotal (pre-tax amount)
-                // Stripe Plans API will always treat this as exclusive (tax added on top)
-                $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $new_price);
+                $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $price_for_stripe);
 
                 if (empty($plan_id)) {
                     return array('success' => false, 'message' => 'Failed to get or create Stripe price/plan');
@@ -3021,16 +3017,40 @@ class MP_Stripe_Price_Updater {
                 return array('success' => false, 'message' => 'Error creating Stripe price: ' . $e->getMessage());
             }
             
-            // Update subscription with new price
-            // According to 2024 Stripe API, we must specify the subscription item ID to replace
-            // to prevent creating duplicate subscription items
+            // Update subscription with new price and preserve existing tax configuration
+            $item_update = array(
+                'id' => $item_id,
+                'price' => $new_price_id
+            );
+
+            // Preserve the existing tax rates configuration (inclusive or exclusive)
+            // Per Stripe API docs: tax rates can be updated on subscription items
+            if ($subscription->tax_rate > 0) {
+                try {
+                    $product = new MeprProduct($subscription->product_id);
+                    // Get or create a tax rate matching the existing configuration
+                    // Use the detected inclusive/exclusive setting from above
+                    $tax_rate_id = $gateway->get_stripe_tax_rate_id(
+                        $subscription->tax_desc,
+                        $subscription->tax_rate,
+                        $product,
+                        $existing_tax_is_inclusive  // Preserve existing inclusive/exclusive setting
+                    );
+
+                    if (!empty($tax_rate_id)) {
+                        // Set tax_rates array on the subscription item
+                        // This ensures the subscription continues to use the same tax configuration
+                        $item_update['tax_rates'] = array($tax_rate_id);
+                    }
+                } catch (Exception $e) {
+                    // If tax rate creation fails, proceed without it
+                    // The subscription will keep its existing tax configuration
+                    error_log("MPSP: Failed to set tax_rate: " . $e->getMessage());
+                }
+            }
+
             $update_data = array(
-                'items' => array(
-                    array(
-                        'id' => $item_id,
-                        'price' => $new_price_id
-                    )
-                ),
+                'items' => array($item_update),
                 'proration_behavior' => 'none', // Disable prorations for price updates
                 'expand' => array('latest_invoice') // Include latest invoice in response for verification
             );
@@ -3042,13 +3062,14 @@ class MP_Stripe_Price_Updater {
             }
             
             // Verify the update was successful by checking the new price ID
-            if (isset($updated_sub['items']['data'][0]['price']['id']) && 
+            if (isset($updated_sub['items']['data'][0]['price']['id']) &&
                 $updated_sub['items']['data'][0]['price']['id'] === $new_price_id) {
                 return array(
-                    'success' => true, 
+                    'success' => true,
                     'stripe_price_id' => $new_price_id,
                     'subscription_status' => $updated_sub['status'] ?? 'unknown',
-                    'api_mode' => $gateway->is_test_mode() ? 'test' : 'live'
+                    'api_mode' => $gateway->is_test_mode() ? 'test' : 'live',
+                    'stripe_tax_is_inclusive' => $existing_tax_is_inclusive
                 );
             } else {
                 return array('success' => false, 'message' => 'Subscription update verification failed - price not updated correctly');
@@ -3063,25 +3084,32 @@ class MP_Stripe_Price_Updater {
 
         try {
             $new_price = floatval($rule['new_price']);
-            $price_includes_tax = !empty($rule['price_includes_tax']);
+            $stripe_tax_is_inclusive = !empty($rule['stripe_tax_is_inclusive']);
 
-            // If price includes tax and subscription has tax, calculate the subtotal first
-            if ($price_includes_tax && $subscription->tax_rate > 0) {
-                // User entered total price - convert to subtotal
-                // Formula: subtotal = total / (1 + tax_rate/100)
-                $new_price = $new_price / (1 + ($subscription->tax_rate / 100.00));
-                $new_price = MeprUtils::format_float($new_price, 2);
-            }
+            // Calculate based on whether Stripe subscription has inclusive or exclusive taxes
+            if ($stripe_tax_is_inclusive && $subscription->tax_rate > 0) {
+                // Stripe has INCLUSIVE taxes
+                // User entered the TOTAL (with tax) - this is what they want customers to pay
+                // Convert to subtotal for MemberPress storage: subtotal = total / (1 + tax_rate/100)
+                $subtotal = $new_price / (1 + ($subscription->tax_rate / 100.00));
+                $subtotal = MeprUtils::format_float($subtotal, 2);
 
-            $new_total = $new_price;
-            $new_tax_amount = 0.00;
+                // Calculate tax amount from the subtotal
+                $new_tax_amount = round($subtotal * ($subscription->tax_rate / 100.00), 2, PHP_ROUND_HALF_DOWN);
+                $new_total = MeprUtils::format_float($subtotal + $new_tax_amount, 2);
+                $new_price_for_db = $subtotal;  // Store subtotal in price field
+            } else {
+                // Stripe has EXCLUSIVE taxes (or no taxes)
+                // User entered the SUBTOTAL - use as-is
+                $new_price_for_db = $new_price;  // Store subtotal in price field
+                $new_total = $new_price;
+                $new_tax_amount = 0.00;
 
-            // If the subscription has taxes, recalculate them based on the existing tax rate
-            if ($subscription->tax_rate > 0) {
-                // The new_price is now the subtotal (pre-tax amount)
-                // Calculate tax amount based on the existing subscription's tax rate
-                $new_tax_amount = round($new_price * ($subscription->tax_rate / 100.00), 2, PHP_ROUND_HALF_DOWN);
-                $new_total = MeprUtils::format_float($new_price + $new_tax_amount, 2);
+                // If the subscription has taxes, calculate them
+                if ($subscription->tax_rate > 0) {
+                    $new_tax_amount = round($new_price * ($subscription->tax_rate / 100.00), 2, PHP_ROUND_HALF_DOWN);
+                    $new_total = MeprUtils::format_float($new_price + $new_tax_amount, 2);
+                }
             }
 
             // Direct database update to avoid triggering emails, webhooks, and other events
@@ -3089,7 +3117,7 @@ class MP_Stripe_Price_Updater {
             $updated = $wpdb->update(
                 $wpdb->prefix . 'mepr_subscriptions',
                 array(
-                    'price' => $new_price,
+                    'price' => $new_price_for_db,  // Always store subtotal in price field
                     'total' => $new_total,
                     'tax_amount' => $new_tax_amount
                 ),
