@@ -33,23 +33,22 @@ Stripe has two types of tax rates:
 
 ### 3. How MemberPress Creates Stripe Subscriptions
 
-When MemberPress creates a Stripe subscription (see `MeprStripeGateway.php` lines 2407-2413):
+When MemberPress creates a Stripe subscription (see `MeprStripeGateway.php`, search for `get_stripe_price_id($tax_inclusive`):
 
 ```php
-$tax_inclusive = $mepr_options->attr('tax_calc_type') === 'inclusive';
+// Inclusive: send TOTAL to Stripe. Exclusive: send SUBTOTAL.
+$price_id = $this->get_stripe_price_id($tax_inclusive ? (float) $sub->total : (float) $sub->price, $prd, $sub);
 
-if ($tax_inclusive) {
-    // For inclusive: send TOTAL to Stripe
-    $plan_id = $this->get_stripe_plan_id($sub, $prd, $sub->total);
-    // Get INCLUSIVE tax rate
-    $tax_rate_id = $this->get_stripe_tax_rate_id(..., true);
-} else {
-    // For exclusive: send SUBTOTAL to Stripe
-    $plan_id = $this->get_stripe_plan_id($sub, $prd, $sub->price);
-    // Get EXCLUSIVE tax rate
-    $tax_rate_id = $this->get_stripe_tax_rate_id(..., false);
+// Tax rates are only used when Stripe automatic tax is OFF
+if (!self::use_automatic_tax() && $sub->tax_rate > 0 && $sub->tax_amount > 0) {
+    $tax_rate_id = $this->get_stripe_tax_rate_id($sub->tax_desc, $sub->tax_rate, $prd, $tax_inclusive);
 }
 ```
+
+**MemberPress 1.14.0+ changes:**
+- `get_stripe_plan_id($sub, $prd, $amount)` was removed and replaced by `get_stripe_price_id(float $amount, MeprProduct $prd, ?MeprSubscription $sub = null, bool $force_one_time = false)`. The plugin calls the new one when it exists and falls back to the old one on older MemberPress.
+- **Stripe automatic tax** (`MeprStripeGateway::use_automatic_tax()`): Stripe calculates tax itself (`automatic_tax.enabled` on the subscription), no tax rates are attached, and inclusive/exclusive lives on the price's `tax_behavior`. Tax rates can't be combined with automatic tax.
+- **Multi-currency**: subscriptions can have their own `currency`. Rule prices are in the site's primary currency, so the plugin skips subscriptions billed in any other currency.
 
 **Key Point**: The subscription's Stripe configuration is determined by the **global MemberPress setting at the time of creation**. This setting is NOT stored with the subscription, so we cannot reliably determine later whether a subscription was created with inclusive or exclusive taxes.
 
@@ -74,14 +73,18 @@ Instead of asking the user whether their price includes tax (which they might no
 // 1. Retrieve existing Stripe subscription
 $stripe_sub = $gateway->send_stripe_request("subscriptions/{$stripe_sub_id}", array(), 'get');
 
-// 2. Check if it has tax rates
-$tax_rate_id = $stripe_sub['items']['data'][0]['tax_rates'][0]['id'] ?? null;
-
-// 3. Look up the tax rate to check if it's inclusive
-if ($tax_rate_id) {
+// 2. Stripe Tax (automatic tax): inclusive/exclusive is the price's tax_behavior
+$uses_automatic_tax = !empty($stripe_sub['automatic_tax']['enabled']);
+if ($uses_automatic_tax) {
+    $existing_tax_is_inclusive = ($stripe_sub['items']['data'][0]['price']['tax_behavior'] ?? '') === 'inclusive';
+} elseif ($tax_rate_id = $stripe_sub['items']['data'][0]['tax_rates'][0]['id'] ?? null) {
+    // 3. Tax rates: look up the tax rate to check if it's inclusive
     $tax_rate_obj = $gateway->send_stripe_request("tax_rates/{$tax_rate_id}", array(), 'get');
     $existing_tax_is_inclusive = !empty($tax_rate_obj['inclusive']);
 }
+
+// 4. Under automatic tax, the NEW price's tax_behavior wins (MemberPress sets it from the
+//    current global setting, which may have changed), so MP matches what Stripe will charge
 ```
 
 ### Price Interpretation Logic
@@ -151,34 +154,49 @@ The plugin handles everything automatically.
 #### 1. Stripe Update (`update_stripe_subscription`)
 
 ```php
-// Detect existing tax configuration
-$existing_tax_is_inclusive = false;
-if (!empty($stripe_sub['items']['data'][0]['tax_rates'])) {
-    $tax_rate_id = $stripe_sub['items']['data'][0]['tax_rates'][0]['id'];
-    $tax_rate_obj = $gateway->send_stripe_request("tax_rates/{$tax_rate_id}", [], 'get');
-    $existing_tax_is_inclusive = !empty($tax_rate_obj['inclusive']);
-}
+// Detect existing tax configuration (see Detection Process above)
+$uses_automatic_tax = !empty($stripe_sub['automatic_tax']['enabled']);
+$existing_has_tax_rates = !empty($stripe_sub['items']['data'][0]['tax_rates']);
+// ... sets $existing_tax_is_inclusive
 
 // User's input is interpreted based on detected configuration
 $price_for_stripe = floatval($rule['new_price']);
 
-// Create new Stripe price/plan
-$plan_id = $gateway->get_stripe_plan_id($subscription, $product, $price_for_stripe);
+// Create new Stripe price. Check the OLD method first: MemberPress 1.12.x also has a
+// get_stripe_price_id() with a different signature ($sub, $prd, $price).
+if (method_exists($gateway, 'get_stripe_plan_id')) {
+    $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $price_for_stripe);  // < 1.14.0
+} else {
+    $plan_id = $gateway->get_stripe_price_id((float) $price_for_stripe, $product, $subscription);  // 1.14.0+
+}
 
-// Preserve existing tax configuration
-$tax_rate_id = $gateway->get_stripe_tax_rate_id(
-    $subscription->tax_desc,
-    $subscription->tax_rate,
-    $product,
-    $existing_tax_is_inclusive  // Use same inclusive/exclusive setting
-);
+// Read the new price back from Stripe
+$new_price_obj = $gateway->send_stripe_request("prices/{$new_price_id}", array(), 'get');
 
-// Update subscription item with new price and tax rate
-$item_update = [
-    'id' => $item_id,
-    'price' => $new_price_id,
-    'tax_rates' => [$tax_rate_id]
-];
+// Billing period guard: MemberPress caches prices by the membership's CURRENT terms. If the
+// new price's recurring interval/interval_count differs from the subscription's current price,
+// abort — switching intervals makes Stripe reset the billing cycle and charge immediately.
+
+// Under automatic tax, use the new price's tax_behavior for $existing_tax_is_inclusive
+
+$item_update = ['id' => $item_id, 'price' => $new_price_id];
+
+// Preserve existing tax rates — only when NOT automatic tax AND the item already had tax rates
+if (!$uses_automatic_tax && $existing_has_tax_rates && $subscription->tax_rate > 0) {
+    $tax_rate_id = $gateway->get_stripe_tax_rate_id(
+        $subscription->tax_desc,
+        $subscription->tax_rate,
+        $product,
+        $existing_tax_is_inclusive  // Use same inclusive/exclusive setting
+    );
+    if (!empty($tax_rate_id)) {
+        $item_update['tax_rates'] = [$tax_rate_id];
+    }
+}
+
+// Returned to the MemberPress update step:
+//   'stripe_tax_is_inclusive' => $existing_tax_is_inclusive,
+//   'stripe_has_tax'          => $uses_automatic_tax || $existing_has_tax_rates
 ```
 
 #### 2. MemberPress Update (`update_memberpress_subscription`)
@@ -186,6 +204,8 @@ $item_update = [
 ```php
 $new_price = floatval($rule['new_price']);
 $stripe_tax_is_inclusive = !empty($rule['stripe_tax_is_inclusive']);
+// If Stripe doesn't tax this subscription, MP doesn't either (the real code uses $tax_rate below)
+$tax_rate = (!isset($rule['stripe_has_tax']) || $rule['stripe_has_tax']) ? $subscription->tax_rate : 0;
 
 if ($stripe_tax_is_inclusive && $subscription->tax_rate > 0) {
     // INCLUSIVE: User entered TOTAL, convert to subtotal for MP
@@ -334,6 +354,15 @@ If tax rate detection fails:
 - Defaults to treating price as exclusive (safer assumption)
 - Logs error for debugging
 - Continues with update (doesn't fail completely)
+
+Job processing:
+- All catches use `\Throwable`, so PHP `Error`s (e.g. a removed MemberPress method) become error entries instead of killing the cron run
+- If resuming a job throws, the job is marked `failed` and its rule disabled (same as Cancel), so it can't sit at "running" forever
+- A subscription this rule already updated successfully at this price is never picked up again (the price check alone misses inclusive-tax subs, since MP stores the subtotal)
+- Each subscription gets a `processing` entry BEFORE it's touched, then updated with the result. If PHP dies mid-update (memory/time limit), the row stays `processing` and the subscription isn't retried forever
+- `check_database_version()` runs on `init` (every request, including cron and AJAX), so the widened enums exist before anything writes `processing`/`unknown`
+- `maybe_stop_jobs_for_new_version()` also runs on `init`: once per plugin version (tracked in the `mpsp_jobs_reset_version` option) it cancels every unfinished job and disables every rule, so nothing from an older version keeps running. The admin reviews settings and starts a fresh job. Finished job history and logs are kept. Deliberately not tied to activation/upgrade hooks, which zip-upload updates can skip
+- Automatic cron runs also skip subscriptions that already failed (or were left `processing`) on this rule, so they aren't retried every 5 minutes with a new email each time; "Process Now" still retries them
 
 ---
 

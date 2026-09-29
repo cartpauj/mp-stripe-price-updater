@@ -37,7 +37,10 @@ class MP_Stripe_Price_Updater {
 
         // Create database tables on activation and check version
         register_activation_hook(__FILE__, array($this, 'create_database_tables'));
-        add_action('admin_init', array($this, 'check_database_version'));
+        // On init (every request, including cron and AJAX) so tables are current and old jobs are
+        // cleared before anything can run
+        add_action('init', array($this, 'check_database_version'), 1);
+        add_action('init', array($this, 'maybe_stop_jobs_for_new_version'), 2);
 
         // AJAX handlers
         add_action('wp_ajax_mpsp_get_memberships', array($this, 'ajax_get_memberships'));
@@ -103,7 +106,48 @@ class MP_Stripe_Price_Updater {
         $current_db_version = get_option('mpsp_db_version', '1.0.0');
         
         if (version_compare($current_db_version, MPSP_VERSION, '<')) {
-            $this->create_database_tables();
+            try {
+                $this->create_database_tables();
+            } catch (\Throwable $e) {
+                error_log('MPSP: Database update failed: ' . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Once per plugin version (on init, before anything can run), stop every unfinished job and
+     * disable every rule, so nothing keeps running from an older version. The admin reviews the
+     * settings and starts a fresh job. Finished job history and logs are kept.
+     */
+    public function maybe_stop_jobs_for_new_version() {
+        if (get_option('mpsp_jobs_reset_version') === MPSP_VERSION) {
+            return;
+        }
+
+        try {
+            $this->stop_jobs_after_update();
+            update_option('mpsp_jobs_reset_version', MPSP_VERSION);
+        } catch (\Throwable $e) {
+            error_log('MPSP: Failed to stop old jobs: ' . $e->getMessage());
+        }
+    }
+
+    private function stop_jobs_after_update() {
+        global $wpdb;
+
+        $stopped = $wpdb->query($wpdb->prepare(
+            "UPDATE {$wpdb->prefix}mpsp_jobs SET status = 'cancelled', current_job = 0, completed_at = %s, last_activity_at = %s WHERE status = 'running' OR current_job = 1",
+            current_time('mysql'),
+            current_time('mysql')
+        ));
+
+        $disabled = $wpdb->query($wpdb->prepare(
+            "UPDATE {$wpdb->prefix}mpsp_rules SET enabled = 0, updated_at = %s WHERE enabled = 1",
+            current_time('mysql')
+        ));
+
+        if ($stopped || $disabled) {
+            error_log(sprintf('MPSP: Plugin updated to %s - stopped %d unfinished job(s) and disabled %d rule(s)', MPSP_VERSION, (int) $stopped, (int) $disabled));
         }
     }
     
@@ -1349,7 +1393,7 @@ class MP_Stripe_Price_Updater {
                 $sub->subscr_id,
                 $sub->price,
                 $form_data['new_price'],
-                get_option('mepr_currency_code', 'USD'),
+                (MeprOptions::fetch()->currency_code ?: 'USD'),
                 $sub->period . ' ' . $sub->period_type,
                 ucfirst($sub->status),
                 sprintf('Stripe Gateway (%s)', sanitize_text_field($form_data['gateway_id'] ?? 'unknown')),
@@ -1809,7 +1853,7 @@ class MP_Stripe_Price_Updater {
                 r.name as rule_name,
                 COUNT(e.id) as total_entries,
                 SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_entries,
-                SUM(CASE WHEN e.status = 'error' THEN 1 ELSE 0 END) as error_entries
+                SUM(CASE WHEN e.status <> 'success' THEN 1 ELSE 0 END) as error_entries
             FROM {$wpdb->prefix}mpsp_jobs j
             LEFT JOIN {$wpdb->prefix}mpsp_rules r ON j.rule_id = r.id
             LEFT JOIN {$wpdb->prefix}mpsp_entries e ON j.id = e.job_id
@@ -1896,7 +1940,7 @@ class MP_Stripe_Price_Updater {
         $query_params = array($job_id);
         
         if ($export_type === 'failed') {
-            $where_clause .= " AND e.status = 'error'";
+            $where_clause .= " AND e.status <> 'success'";
         }
         
         // Get all entries (or failed only) with subscription data
@@ -1945,7 +1989,7 @@ class MP_Stripe_Price_Updater {
         ));
         
         // Add data rows
-        $currency = get_option('mepr_currency_code', 'USD');
+        $currency = (MeprOptions::fetch()->currency_code ?: 'USD');
         foreach ($entries as $entry) {
             fputcsv($output, array(
                 $entry['processed_at'],
@@ -2124,7 +2168,7 @@ class MP_Stripe_Price_Updater {
                 wp_send_json_error('No matching subscriptions found for this rule');
             }
         
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             wp_send_json_error('Processing failed: ' . $e->getMessage());
         }
     }
@@ -2176,6 +2220,7 @@ class MP_Stripe_Price_Updater {
                     // Pass the tax configuration info from Stripe
                     $rule_with_tax_info = $rule;
                     $rule_with_tax_info['stripe_tax_is_inclusive'] = $stripe_result['stripe_tax_is_inclusive'] ?? false;
+                    $rule_with_tax_info['stripe_has_tax'] = $stripe_result['stripe_has_tax'] ?? true;
                     $mp_result = $this->update_memberpress_subscription($subscription, $rule_with_tax_info);
                     
                     if ($mp_result['success']) {
@@ -2235,7 +2280,7 @@ class MP_Stripe_Price_Updater {
                 }
             }
             
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             // Update the existing entry with exception details
             $wpdb->update(
                 $wpdb->prefix . 'mpsp_entries',
@@ -2298,10 +2343,27 @@ class MP_Stripe_Price_Updater {
         return $wpdb->get_results($wpdb->prepare($query, $gateway_string));
     }
     
-    private function get_matching_subscriptions($criteria) {
+    private function get_matching_subscriptions($criteria, $skip_failed = false) {
         global $wpdb;
         
         $gateway_string = $criteria['gateway_id'];
+
+        // Subscriptions this rule already updated at this price. The price check below can't catch these
+        // for inclusive-tax subscriptions (MemberPress stores the subtotal, the rule holds the total).
+        // With $skip_failed (automatic runs), also skip ones that already failed or crashed, so they aren't retried
+        // in a new job every cron run. "Process Now" still retries failures.
+        $handled_ids = array();
+        if (!empty($criteria['id']) && isset($criteria['new_price'])) {
+            // 'processing' = PHP died mid-update last time; treat it like a failure
+            $statuses = $skip_failed ? "'success','error','processing'" : "'success'";
+            $handled_ids = array_map('intval', $wpdb->get_col($wpdb->prepare(
+                "SELECT DISTINCT e.subscription_id FROM {$wpdb->prefix}mpsp_entries e
+                 INNER JOIN {$wpdb->prefix}mpsp_jobs j ON e.job_id = j.id
+                 WHERE j.rule_id = %d AND e.status IN ($statuses) AND ABS(e.new_price - %f) < 0.005",
+                $criteria['id'],
+                floatval($criteria['new_price'])
+            )));
+        }
         
         $query = "
             SELECT s.*, u.ID as user_id, u.display_name, u.user_email
@@ -2314,9 +2376,20 @@ class MP_Stripe_Price_Updater {
         
         $results = $wpdb->get_results($wpdb->prepare($query, $gateway_string, $criteria['membership_id']));
         $matching = array();
+        $primary_currency = strtoupper(MeprOptions::fetch()->currency_code ?? '');
         
         foreach ($results as $row) {
+            if (in_array((int) $row->id, $handled_ids, true)) {
+                continue;
+            }
+
             $subscription = new MeprSubscription($row->id);
+            
+            // Rule prices are in the site's primary currency, so skip subscriptions billed in
+            // another currency (MemberPress 1.14.0+ multi-currency)
+            if (!empty($subscription->currency) && strtoupper($subscription->currency) !== $primary_currency) {
+                continue;
+            }
             
             // Skip subscriptions that already have the target price
             if (isset($criteria['new_price']) && abs($subscription->price - floatval($criteria['new_price'])) < 0.01) {
@@ -2374,6 +2447,7 @@ class MP_Stripe_Price_Updater {
     
     public function process_price_updates() {
         global $wpdb;
+
         
         // Note: Removed the early exit check - we want to continue existing jobs
         
@@ -2404,15 +2478,42 @@ class MP_Stripe_Price_Updater {
         );
         
         if ($existing_job) {
-            // Continue the existing job
-            $this->continue_background_job($existing_job);
+            // Continue the existing job. If it throws, fail the job (and disable the rule, like Cancel does)
+            // so it doesn't stay "running" forever and block every other rule.
+            try {
+                $this->continue_background_job($existing_job);
+            } catch (\Throwable $e) {
+                error_log('MPSP: Job ' . $existing_job['id'] . ' failed: ' . $e->getMessage());
+                $wpdb->update(
+                    $wpdb->prefix . 'mpsp_jobs',
+                    array(
+                        'status' => 'failed',
+                        'completed_at' => current_time('mysql'),
+                        'last_activity_at' => current_time('mysql'),
+                        'current_job' => 0
+                    ),
+                    array('id' => $existing_job['id']),
+                    array('%s', '%s', '%s', '%d'),
+                    array('%d')
+                );
+                $wpdb->update(
+                    $wpdb->prefix . 'mpsp_rules',
+                    array(
+                        'enabled' => 0,
+                        'updated_at' => current_time('mysql')
+                    ),
+                    array('id' => $existing_job['rule_id']),
+                    array('%d', '%s'),
+                    array('%d')
+                );
+            }
             return;
         }
         
         // No running job exists, check for rules that need new jobs
         foreach ($rules as $rule) {
             try {
-                $matching_subscriptions = $this->get_matching_subscriptions($rule);
+                $matching_subscriptions = $this->get_matching_subscriptions($rule, true);
                 if (count($matching_subscriptions) > 0) {
                     $this->start_new_job($rule, $matching_subscriptions);
                     break; // Only start one new job at a time
@@ -2420,7 +2521,7 @@ class MP_Stripe_Price_Updater {
                     // Auto-disable rules that have no more work to do
                     $this->check_and_auto_disable_rule($rule);
                 }
-            } catch (Exception $e) {
+            } catch (\Throwable $e) {
                 error_log('MemberPress Stripe Price Updater cron error: ' . $e->getMessage());
             }
         }
@@ -2597,6 +2698,33 @@ class MP_Stripe_Price_Updater {
             
             $subscription = $sub_data['subscription'];
             $user = $sub_data['user'];
+
+            // Record the subscription BEFORE touching it. If PHP dies mid-update (memory or time limit),
+            // this row stays 'processing', so the next run skips it instead of retrying it forever.
+            $inserted = $wpdb->insert(
+                $wpdb->prefix . 'mpsp_entries',
+                array(
+                    'job_id' => $job_id,
+                    'subscription_id' => $subscription->id,
+                    'user_id' => $user->ID,
+                    'old_price' => $subscription->price,
+                    'new_price' => $rule['new_price'],
+                    'status' => 'processing',
+                    'stripe_price_id' => null,
+                    'api_mode' => 'unknown',
+                    'error_message' => 'Processing started',
+                    'processed_at' => current_time('mysql')
+                ),
+                array('%d', '%d', '%d', '%f', '%f', '%s', '%s', '%s', '%s', '%s')
+            );
+
+            if ($inserted === false) {
+                // Without a row we can't guarantee it won't be retried forever, so don't touch it
+                error_log('MPSP: Could not create entry for subscription ' . $subscription->id . ': ' . $wpdb->last_error);
+                break;
+            }
+
+            $entry_id = $wpdb->insert_id;
             
             try {
                 // Update in Stripe first
@@ -2607,6 +2735,7 @@ class MP_Stripe_Price_Updater {
                     // Pass the tax configuration info from Stripe
                     $rule_with_tax_info = $rule;
                     $rule_with_tax_info['stripe_tax_is_inclusive'] = $stripe_result['stripe_tax_is_inclusive'] ?? false;
+                    $rule_with_tax_info['stripe_has_tax'] = $stripe_result['stripe_has_tax'] ?? true;
                     $mp_result = $this->update_memberpress_subscription($subscription, $rule_with_tax_info);
                     
                     if ($mp_result['success']) {
@@ -2627,44 +2756,36 @@ class MP_Stripe_Price_Updater {
                     $error_message = 'Stripe update failed: ' . $stripe_result['message'];
                 }
                 
-                // Create entry in database
-                $wpdb->insert(
+                // Record the result
+                $wpdb->update(
                     $wpdb->prefix . 'mpsp_entries',
                     array(
-                        'job_id' => $job_id,
-                        'subscription_id' => $subscription->id,
-                        'user_id' => $user->ID,
-                        'old_price' => $subscription->price,
-                        'new_price' => $rule['new_price'],
                         'status' => $status,
                         'stripe_price_id' => $stripe_result['stripe_price_id'] ?? null,
                         'api_mode' => $stripe_result['api_mode'] ?? 'unknown',
                         'error_message' => $error_message,
                         'processed_at' => current_time('mysql')
                     ),
-                    array('%d', '%d', '%d', '%f', '%f', '%s', '%s', '%s', '%s', '%s')
+                    array('id' => $entry_id),
+                    array('%s', '%s', '%s', '%s', '%s'),
+                    array('%d')
                 );
                 
-            } catch (Exception $e) {
+            } catch (\Throwable $e) {
                 $error_count++;
                 $processed_count++;
                 
-                // Create error entry
-                $wpdb->insert(
+                // Record the error
+                $wpdb->update(
                     $wpdb->prefix . 'mpsp_entries',
                     array(
-                        'job_id' => $job_id,
-                        'subscription_id' => $subscription->id,
-                        'user_id' => $user->ID,
-                        'old_price' => $subscription->price,
-                        'new_price' => $rule['new_price'],
                         'status' => 'error',
-                        'stripe_price_id' => null,
-                        'api_mode' => 'unknown',
                         'error_message' => 'Exception: ' . $e->getMessage(),
                         'processed_at' => current_time('mysql')
                     ),
-                    array('%d', '%d', '%d', '%f', '%f', '%s', '%s', '%s', '%s', '%s')
+                    array('id' => $entry_id),
+                    array('%s', '%s', '%s'),
+                    array('%d')
                 );
             }
             
@@ -2746,7 +2867,7 @@ class MP_Stripe_Price_Updater {
             
             // Auto-disable the rule if it has no more work to do (now that job is marked completed)
             $this->check_and_auto_disable_rule($rule);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('Error completing job: ' . $e->getMessage());
             // Ensure job status is cleared even if completion fails
             global $wpdb;
@@ -2824,7 +2945,7 @@ class MP_Stripe_Price_Updater {
             }
             
             return $csv_content;
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('CSV generation error: ' . $e->getMessage());
             return "Subscription ID,User Email,User Name,Old Price,New Price,Status,Error Message,Stripe Subscription ID,API Mode,Stripe Price ID,Updated At\nError,,,,,CSV generation failed," . $e->getMessage() . ",,,\n";
         }
@@ -2839,7 +2960,7 @@ class MP_Stripe_Price_Updater {
                 return '"' . $value . '"';
             }
             return $value;
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('CSV escape error: ' . $e->getMessage());
             return '""'; // Return empty quoted string on error
         }
@@ -2892,7 +3013,7 @@ class MP_Stripe_Price_Updater {
                     $attachments = array($temp_file);
                 }
             }
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('Failed to create CSV attachment: ' . $e->getMessage());
             // Continue without attachment
         }
@@ -2920,7 +3041,7 @@ class MP_Stripe_Price_Updater {
                     }
                 }
             }
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('Failed to send completion email: ' . $e->getMessage());
         }
         
@@ -2928,7 +3049,7 @@ class MP_Stripe_Price_Updater {
         if (!empty($temp_file) && file_exists($temp_file)) {
             try {
                 unlink($temp_file);
-            } catch (Exception $e) {
+            } catch (\Throwable $e) {
                 error_log('Failed to clean up temporary file: ' . $e->getMessage());
             }
         }
@@ -2973,9 +3094,16 @@ class MP_Stripe_Price_Updater {
                 );
             }
 
+            // Stripe Tax (automatic tax, MemberPress 1.14.0+) calculates tax itself and can't be combined with tax rates
+            $uses_automatic_tax = !empty($stripe_sub['automatic_tax']['enabled']);
+            $existing_has_tax_rates = !empty($stripe_sub['items']['data'][0]['tax_rates']);
+
             // Detect if existing subscription has inclusive or exclusive tax rates
             $existing_tax_is_inclusive = false;
-            if (!empty($stripe_sub['items']['data'][0]['tax_rates']) && is_array($stripe_sub['items']['data'][0]['tax_rates'])) {
+            if ($uses_automatic_tax) {
+                // With automatic tax, inclusive/exclusive lives on the price's tax_behavior
+                $existing_tax_is_inclusive = ($stripe_sub['items']['data'][0]['price']['tax_behavior'] ?? '') === 'inclusive';
+            } elseif (!empty($stripe_sub['items']['data'][0]['tax_rates']) && is_array($stripe_sub['items']['data'][0]['tax_rates'])) {
                 $tax_rate_id = $stripe_sub['items']['data'][0]['tax_rates'][0]['id'] ?? null;
                 if ($tax_rate_id) {
                     try {
@@ -2984,7 +3112,7 @@ class MP_Stripe_Price_Updater {
                         if (!empty($tax_rate_obj['inclusive'])) {
                             $existing_tax_is_inclusive = true;
                         }
-                    } catch (Exception $e) {
+                    } catch (\Throwable $e) {
                         // If we can't retrieve the tax rate, assume exclusive as default
                         error_log("MPSP: Could not retrieve tax rate {$tax_rate_id}: " . $e->getMessage());
                     }
@@ -3006,15 +3134,51 @@ class MP_Stripe_Price_Updater {
                 $product = new MeprProduct($subscription->product_id);
 
                 // Use MemberPress method to get or create a price/plan ID
-                $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $price_for_stripe);
+                // MemberPress 1.14.0+ removed get_stripe_plan_id() in favor of get_stripe_price_id().
+                // Check for the old method first: 1.12.x also has a get_stripe_price_id() with a different signature.
+                if (method_exists($gateway, 'get_stripe_plan_id')) {
+                    $plan_id = $gateway->get_stripe_plan_id($subscription, $product, $price_for_stripe);
+                } else {
+                    $plan_id = $gateway->get_stripe_price_id((float) $price_for_stripe, $product, $subscription);
+                }
 
                 if (empty($plan_id)) {
                     return array('success' => false, 'message' => 'Failed to get or create Stripe price/plan');
                 }
 
                 $new_price_id = $plan_id;
-            } catch (Exception $e) {
+                $new_price_obj = $gateway->send_stripe_request("prices/{$new_price_id}", array(), 'get');
+            } catch (\Throwable $e) {
                 return array('success' => false, 'message' => 'Error creating Stripe price: ' . $e->getMessage());
+            }
+
+            // MemberPress looks prices up by the membership's CURRENT billing terms. If those changed since this
+            // subscription was created, the price could have a different interval, and switching intervals makes
+            // Stripe reset the billing cycle and charge the customer immediately. Refuse instead.
+            $old_recurring = $stripe_sub['items']['data'][0]['price']['recurring'] ?? null;
+            $new_recurring = $new_price_obj['recurring'] ?? null;
+            if (!empty($old_recurring) && (
+                empty($new_recurring) ||
+                ($old_recurring['interval'] ?? '') !== ($new_recurring['interval'] ?? '') ||
+                (int) ($old_recurring['interval_count'] ?? 0) !== (int) ($new_recurring['interval_count'] ?? 0)
+            )) {
+                return array(
+                    'success' => false,
+                    'message' => sprintf(
+                        'Billing period mismatch: subscription bills every %d %s but the new Stripe price (%s) bills every %d %s. Skipped to avoid an immediate charge.',
+                        (int) ($old_recurring['interval_count'] ?? 0),
+                        $old_recurring['interval'] ?? '?',
+                        $new_price_id,
+                        (int) ($new_recurring['interval_count'] ?? 0),
+                        $new_recurring['interval'] ?? 'one-time'
+                    )
+                );
+            }
+
+            // With automatic tax, MemberPress sets the new price's tax_behavior from the CURRENT global setting,
+            // which may differ from the old price. Use what Stripe will actually charge.
+            if ($uses_automatic_tax && in_array($new_price_obj['tax_behavior'] ?? '', array('inclusive', 'exclusive'), true)) {
+                $existing_tax_is_inclusive = $new_price_obj['tax_behavior'] === 'inclusive';
             }
             
             // Update subscription with new price and preserve existing tax configuration
@@ -3025,7 +3189,8 @@ class MP_Stripe_Price_Updater {
 
             // Preserve the existing tax rates configuration (inclusive or exclusive)
             // Per Stripe API docs: tax rates can be updated on subscription items
-            if ($subscription->tax_rate > 0) {
+            // Only when the item already uses tax rates, so we never add tax that wasn't there before
+            if (!$uses_automatic_tax && $existing_has_tax_rates && $subscription->tax_rate > 0) {
                 try {
                     $product = new MeprProduct($subscription->product_id);
                     // Get or create a tax rate matching the existing configuration
@@ -3042,7 +3207,7 @@ class MP_Stripe_Price_Updater {
                         // This ensures the subscription continues to use the same tax configuration
                         $item_update['tax_rates'] = array($tax_rate_id);
                     }
-                } catch (Exception $e) {
+                } catch (\Throwable $e) {
                     // If tax rate creation fails, proceed without it
                     // The subscription will keep its existing tax configuration
                     error_log("MPSP: Failed to set tax_rate: " . $e->getMessage());
@@ -3069,12 +3234,13 @@ class MP_Stripe_Price_Updater {
                     'stripe_price_id' => $new_price_id,
                     'subscription_status' => $updated_sub['status'] ?? 'unknown',
                     'api_mode' => $gateway->is_test_mode() ? 'test' : 'live',
-                    'stripe_tax_is_inclusive' => $existing_tax_is_inclusive
+                    'stripe_tax_is_inclusive' => $existing_tax_is_inclusive,
+                    'stripe_has_tax' => $uses_automatic_tax || $existing_has_tax_rates
                 );
             } else {
                 return array('success' => false, 'message' => 'Subscription update verification failed - price not updated correctly');
             }
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             return array('success' => false, 'message' => 'Stripe API exception: ' . $e->getMessage());
         }
     }
@@ -3085,17 +3251,19 @@ class MP_Stripe_Price_Updater {
         try {
             $new_price = floatval($rule['new_price']);
             $stripe_tax_is_inclusive = !empty($rule['stripe_tax_is_inclusive']);
+            // If Stripe doesn't tax this subscription, don't add tax on the MemberPress side either
+            $tax_rate = (!isset($rule['stripe_has_tax']) || $rule['stripe_has_tax']) ? $subscription->tax_rate : 0;
 
             // Calculate based on whether Stripe subscription has inclusive or exclusive taxes
-            if ($stripe_tax_is_inclusive && $subscription->tax_rate > 0) {
+            if ($stripe_tax_is_inclusive && $tax_rate > 0) {
                 // Stripe has INCLUSIVE taxes
                 // User entered the TOTAL (with tax) - this is what they want customers to pay
                 // Convert to subtotal for MemberPress storage: subtotal = total / (1 + tax_rate/100)
-                $subtotal = $new_price / (1 + ($subscription->tax_rate / 100.00));
+                $subtotal = $new_price / (1 + ($tax_rate / 100.00));
                 $subtotal = MeprUtils::format_float($subtotal, 2);
 
                 // Calculate tax amount from the subtotal
-                $new_tax_amount = round($subtotal * ($subscription->tax_rate / 100.00), 2, PHP_ROUND_HALF_DOWN);
+                $new_tax_amount = round($subtotal * ($tax_rate / 100.00), 2, PHP_ROUND_HALF_DOWN);
                 $new_total = MeprUtils::format_float($subtotal + $new_tax_amount, 2);
                 $new_price_for_db = $subtotal;  // Store subtotal in price field
             } else {
@@ -3106,8 +3274,8 @@ class MP_Stripe_Price_Updater {
                 $new_tax_amount = 0.00;
 
                 // If the subscription has taxes, calculate them
-                if ($subscription->tax_rate > 0) {
-                    $new_tax_amount = round($new_price * ($subscription->tax_rate / 100.00), 2, PHP_ROUND_HALF_DOWN);
+                if ($tax_rate > 0) {
+                    $new_tax_amount = round($new_price * ($tax_rate / 100.00), 2, PHP_ROUND_HALF_DOWN);
                     $new_total = MeprUtils::format_float($new_price + $new_tax_amount, 2);
                 }
             }
@@ -3131,7 +3299,7 @@ class MP_Stripe_Price_Updater {
             }
 
             return array('success' => true);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             return array('success' => false, 'message' => $e->getMessage());
         }
     }
@@ -3508,7 +3676,7 @@ class MP_Stripe_Price_Updater {
                 }
             }
             
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('MPSP log cleanup error: ' . $e->getMessage());
         }
     }
@@ -3578,9 +3746,9 @@ class MP_Stripe_Price_Updater {
             user_id int(11) NOT NULL,
             old_price decimal(10,2) NOT NULL,
             new_price decimal(10,2) NOT NULL,
-            status enum('success','error') NOT NULL,
+            status enum('success','error','processing') NOT NULL,
             stripe_price_id varchar(100) NULL,
-            api_mode enum('test','live') NOT NULL,
+            api_mode enum('test','live','unknown') NOT NULL,
             error_message text NULL,
             processed_at datetime NOT NULL,
             PRIMARY KEY (id),
