@@ -2221,6 +2221,7 @@ class MP_Stripe_Price_Updater {
                     $rule_with_tax_info = $rule;
                     $rule_with_tax_info['stripe_tax_is_inclusive'] = $stripe_result['stripe_tax_is_inclusive'] ?? false;
                     $rule_with_tax_info['stripe_has_tax'] = $stripe_result['stripe_has_tax'] ?? true;
+                    $rule_with_tax_info['charged_price'] = $stripe_result['charged_price'] ?? $rule['new_price'];
                     $mp_result = $this->update_memberpress_subscription($subscription, $rule_with_tax_info);
                     
                     if ($mp_result['success']) {
@@ -2337,6 +2338,7 @@ class MP_Stripe_Price_Updater {
             AND p.post_status = 'publish'
             AND s.gateway = %s
             AND s.status = 'active'
+            AND s.subscr_id LIKE 'sub\\_%%'
             ORDER BY p.post_title
         ";
         
@@ -2372,8 +2374,11 @@ class MP_Stripe_Price_Updater {
             WHERE s.gateway = %s
             AND s.product_id = %d
             AND s.status = 'active'
+            AND s.subscr_id LIKE 'sub\\_%%'
         ";
         
+        // The subscr_id filter skips subscriptions with no real Stripe subscription yet, e.g. cart checkouts
+        // that MemberPress activated with a local placeholder ID before Stripe created the subscription.
         $results = $wpdb->get_results($wpdb->prepare($query, $gateway_string, $criteria['membership_id']));
         $matching = array();
         $primary_currency = strtoupper(MeprOptions::fetch()->currency_code ?? '');
@@ -2736,6 +2741,7 @@ class MP_Stripe_Price_Updater {
                     $rule_with_tax_info = $rule;
                     $rule_with_tax_info['stripe_tax_is_inclusive'] = $stripe_result['stripe_tax_is_inclusive'] ?? false;
                     $rule_with_tax_info['stripe_has_tax'] = $stripe_result['stripe_has_tax'] ?? true;
+                    $rule_with_tax_info['charged_price'] = $stripe_result['charged_price'] ?? $rule['new_price'];
                     $mp_result = $this->update_memberpress_subscription($subscription, $rule_with_tax_info);
                     
                     if ($mp_result['success']) {
@@ -3094,6 +3100,31 @@ class MP_Stripe_Price_Updater {
                 );
             }
 
+            // Coupons: MemberPress puts the full price on the Stripe subscription and attaches a Stripe coupon for the
+            // discount, while it stores the discounted price itself. The coupon stays after the price change, so
+            // Stripe will charge the new price minus the discount; MemberPress must store that same amount.
+            $charged_price = floatval($rule['new_price']);
+            $coupon = $stripe_sub['discount']['coupon'] ?? null;
+            if (!empty($coupon)) {
+                if (($coupon['duration'] ?? '') !== 'forever') {
+                    return array(
+                        'success' => false,
+                        'message' => sprintf('Subscription has a limited-time Stripe coupon (%s, duration: %s). Skipped; update this subscription manually.', $coupon['id'] ?? '?', $coupon['duration'] ?? '?')
+                    );
+                }
+                if (!empty($coupon['percent_off'])) {
+                    $charged_price = $charged_price * (1 - floatval($coupon['percent_off']) / 100);
+                } elseif (!empty($coupon['amount_off'])) {
+                    $coupon_currency = strtoupper($coupon['currency'] ?? $stripe_sub['currency'] ?? '');
+                    $zero_decimal = method_exists('MeprUtils', 'is_zero_decimal_currency') && MeprUtils::is_zero_decimal_currency($coupon_currency);
+                    $charged_price -= $zero_decimal ? floatval($coupon['amount_off']) : floatval($coupon['amount_off']) / 100;
+                }
+                $charged_price = round($charged_price, 2);
+                if ($charged_price <= 0) {
+                    return array('success' => false, 'message' => 'Subscription coupon would bring the new price to zero or below. Skipped; update this subscription manually.');
+                }
+            }
+
             // Stripe Tax (automatic tax, MemberPress 1.14.0+) calculates tax itself and can't be combined with tax rates
             $uses_automatic_tax = !empty($stripe_sub['automatic_tax']['enabled']);
             $existing_has_tax_rates = !empty($stripe_sub['items']['data'][0]['tax_rates']);
@@ -3132,6 +3163,22 @@ class MP_Stripe_Price_Updater {
             try {
                 // Get the product associated with this subscription
                 $product = new MeprProduct($subscription->product_id);
+
+                // MemberPress builds the new price from the SUBSCRIPTION's billing terms but caches it under the
+                // MEMBERSHIP's current terms. If the membership's terms changed since this subscription started,
+                // that would plant a wrong-interval price in the cache for future signups. Skip instead.
+                if ((int) $product->period !== (int) $subscription->period || (string) $product->period_type !== (string) $subscription->period_type) {
+                    return array(
+                        'success' => false,
+                        'message' => sprintf(
+                            'Billing period mismatch: subscription bills every %d %s but the membership now bills every %d %s. Skipped; update this subscription manually.',
+                            (int) $subscription->period,
+                            $subscription->period_type,
+                            (int) $product->period,
+                            $product->period_type
+                        )
+                    );
+                }
 
                 // Use MemberPress method to get or create a price/plan ID
                 // MemberPress 1.14.0+ removed get_stripe_plan_id() in favor of get_stripe_price_id().
@@ -3235,7 +3282,8 @@ class MP_Stripe_Price_Updater {
                     'subscription_status' => $updated_sub['status'] ?? 'unknown',
                     'api_mode' => $gateway->is_test_mode() ? 'test' : 'live',
                     'stripe_tax_is_inclusive' => $existing_tax_is_inclusive,
-                    'stripe_has_tax' => $uses_automatic_tax || $existing_has_tax_rates
+                    'stripe_has_tax' => $uses_automatic_tax || $existing_has_tax_rates,
+                    'charged_price' => $charged_price
                 );
             } else {
                 return array('success' => false, 'message' => 'Subscription update verification failed - price not updated correctly');
@@ -3249,7 +3297,8 @@ class MP_Stripe_Price_Updater {
         global $wpdb;
 
         try {
-            $new_price = floatval($rule['new_price']);
+            // What Stripe will actually charge: the rule's price, minus any recurring coupon on the subscription
+            $new_price = floatval($rule['charged_price'] ?? $rule['new_price']);
             $stripe_tax_is_inclusive = !empty($rule['stripe_tax_is_inclusive']);
             // If Stripe doesn't tax this subscription, don't add tax on the MemberPress side either
             $tax_rate = (!isset($rule['stripe_has_tax']) || $rule['stripe_has_tax']) ? $subscription->tax_rate : 0;
@@ -3280,17 +3329,28 @@ class MP_Stripe_Price_Updater {
                 }
             }
 
+            $fields = array(
+                'price' => $new_price_for_db,  // Always store subtotal in price field
+                'total' => $new_total,
+                'tax_amount' => $new_tax_amount
+            );
+            $formats = array('%f', '%f', '%f');
+
+            // VAT reverse charge stores the removed VAT in tax_reversal_amount. It's a fixed share of the price,
+            // so scale it with the price change to keep it accurate.
+            $old_reversal = isset($subscription->tax_reversal_amount) ? floatval($subscription->tax_reversal_amount) : 0;
+            if ($old_reversal > 0 && floatval($subscription->price) > 0) {
+                $fields['tax_reversal_amount'] = round($old_reversal * $new_price_for_db / floatval($subscription->price), 2);
+                $formats[] = '%f';
+            }
+
             // Direct database update to avoid triggering emails, webhooks, and other events
             // Only update the subscription - existing transactions should remain unchanged
             $updated = $wpdb->update(
                 $wpdb->prefix . 'mepr_subscriptions',
-                array(
-                    'price' => $new_price_for_db,  // Always store subtotal in price field
-                    'total' => $new_total,
-                    'tax_amount' => $new_tax_amount
-                ),
+                $fields,
                 array('id' => $subscription->id),
-                array('%f', '%f', '%f'),
+                $formats,
                 array('%d')
             );
 

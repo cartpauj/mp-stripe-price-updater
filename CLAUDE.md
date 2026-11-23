@@ -49,6 +49,10 @@ if (!self::use_automatic_tax() && $sub->tax_rate > 0 && $sub->tax_amount > 0) {
 - `get_stripe_plan_id($sub, $prd, $amount)` was removed and replaced by `get_stripe_price_id(float $amount, MeprProduct $prd, ?MeprSubscription $sub = null, bool $force_one_time = false)`. The plugin calls the new one when it exists and falls back to the old one on older MemberPress.
 - **Stripe automatic tax** (`MeprStripeGateway::use_automatic_tax()`): Stripe calculates tax itself (`automatic_tax.enabled` on the subscription), no tax rates are attached, and inclusive/exclusive lives on the price's `tax_behavior`. Tax rates can't be combined with automatic tax.
 - **Multi-currency**: subscriptions can have their own `currency`. Rule prices are in the site's primary currency, so the plugin skips subscriptions billed in any other currency.
+- **Shopping cart**: still one MP subscription ↔ one Stripe subscription with one item. But cart subs start with a local placeholder `subscr_id` (`mc-sub-...` in membercore) until Stripe creates the real one, and that can fail and stay forever. The queries only pick up `subscr_id LIKE 'sub\_%'`.
+- **Coupons**: MP puts the FULL price on the Stripe subscription and attaches a Stripe coupon (`duration: forever`), but stores the DISCOUNTED price itself. The coupon stays after our price swap, so the plugin stores `new price − discount` in MP (`charged_price`). Coupons with any other duration are skipped with an error.
+- **Billing terms changed on the membership**: `get_stripe_price_id()` builds the price from the subscription's terms but caches it under the membership's current terms. If they differ, the plugin skips the subscription so it doesn't poison that cache.
+- **VAT reverse charge**: `tax_reversal_amount` is scaled with the price change.
 
 **Key Point**: The subscription's Stripe configuration is determined by the **global MemberPress setting at the time of creation**. This setting is NOT stored with the subscription, so we cannot reliably determine later whether a subscription was created with inclusive or exclusive taxes.
 
