@@ -3,7 +3,7 @@
  * Plugin Name: MemberPress Stripe Price Updater
  * Plugin URI: https://memberpress.com/
  * Description: Automate subscription price changes for MemberPress Stripe subscriptions.
- * Version: 1.3.7
+ * Version: 1.3.8
  * Author: MemberPress
  * License: GPL v2 or later
  */
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 // Define plugin constants
 define('MPSP_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('MPSP_PLUGIN_PATH', plugin_dir_path(__FILE__));
-define('MPSP_VERSION', '1.3.7');
+define('MPSP_VERSION', '1.3.8');
 
 // Main plugin class
 class MP_Stripe_Price_Updater {
