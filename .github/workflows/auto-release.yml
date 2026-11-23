@@ -149,49 +149,43 @@ jobs:
         fi
     
     - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ steps.version.outputs.VERSION }}
-        release_name: MemberPress Stripe Price Updater v${{ steps.version.outputs.VERSION }}
-        body: |
-          ## MemberPress Stripe Price Updater v${{ steps.version.outputs.VERSION }}
-          
-          ### Installation
-          1. Download the `mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip` file
-          2. In WordPress admin, go to Plugins → Add New → Upload Plugin
-          3. Choose the downloaded zip file and click "Install Now"
-          4. Activate the plugin
-          5. Navigate to MemberPress → Stripe Price Updater to configure
-          
-          ### What's Included
-          - `mp-stripe-price-updater.php` - Main plugin file
-          - `LICENSE` - GPL v2 license file
-          
-          ### Requirements
-          - WordPress 5.0+
-          - MemberPress with configured Stripe gateways
-          - PHP 7.4+
-          
-          **Generated from commit:** ${{ github.sha }}
-        draft: false
-        prerelease: false
-    
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip
-        asset_name: mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip
-        asset_content_type: application/zip
-    
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION="${{ steps.version.outputs.VERSION }}"
+        # Fixed asset name so this link always serves the newest build:
+        # https://github.com/${{ github.repository }}/releases/latest/download/mp-stripe-price-updater.zip
+        cp "mp-stripe-price-updater-v${VERSION}.zip" mp-stripe-price-updater.zip
+
+        cat > release-notes.md << EOF
+        ## MemberPress Stripe Price Updater v${VERSION}
+
+        ### Installation
+        1. Download \`mp-stripe-price-updater.zip\` below (not "Source code", which installs as a duplicate plugin)
+        2. In WordPress admin, go to Plugins → Add New → Upload Plugin
+        3. Choose the downloaded zip file and click "Install Now" (choose "Replace current with uploaded" if updating)
+        4. Activate the plugin
+        5. Navigate to MemberPress → Stripe Price Updater to configure
+
+        Always-latest download link: https://github.com/${{ github.repository }}/releases/latest/download/mp-stripe-price-updater.zip
+
+        ### Requirements
+        - WordPress 5.0+
+        - MemberPress with configured Stripe gateways
+        - PHP 7.4+
+
+        **Generated from commit:** ${{ github.sha }}
+        EOF
+
+        gh release create "v${VERSION}" mp-stripe-price-updater.zip \
+          --title "MemberPress Stripe Price Updater v${VERSION}" \
+          --notes-file release-notes.md \
+          --target "$(git rev-parse HEAD)" \
+          --latest
+
     - name: Clean up temporary files
       run: |
-        rm -rf mp-stripe-price-updater/
+        rm -rf mp-stripe-price-updater/ mp-stripe-price-updater.zip release-notes.md
         echo "Cleanup completed"
     
     - name: Summary
@@ -199,6 +193,6 @@ jobs:
         echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
         echo "- **Previous Version:** ${{ steps.version.outputs.CURRENT_VERSION }}" >> $GITHUB_STEP_SUMMARY
         echo "- **New Version:** ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Zip File:** mp-stripe-price-updater-v${{ steps.version.outputs.VERSION }}.zip" >> $GITHUB_STEP_SUMMARY
+        echo "- **Release asset:** mp-stripe-price-updater.zip" >> $GITHUB_STEP_SUMMARY
         echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Status:** Successfully created new patch release" >> $GITHUB_STEP_SUMMARY
